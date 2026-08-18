@@ -9,6 +9,7 @@ import { Platform } from "react-native";
 import "@/lib/_core/nativewind-pressable";
 import { ThemeProvider } from "@/lib/theme-provider";
 import { AccountingProvider } from "@/lib/accounting";
+import { InstallmentPostingSync } from "@/components/installment-posting-sync";
 import {
   SafeAreaFrameContext,
   SafeAreaInsetsContext,
@@ -84,6 +85,7 @@ export default function RootLayout() {
       <trpc.Provider client={trpcClient} queryClient={queryClient}>
         <QueryClientProvider client={queryClient}>
           <AccountingProvider>
+          <InstallmentPostingSync />
           {/* Default to hiding native headers so raw route segments don't appear (e.g. "(tabs)", "products/[id]"). */}
           {/* If a screen needs the native header, explicitly enable it and set a human title via Stack.Screen options. */}
           {/* in order for ios apps tab switching to work properly, use presentation: "fullScreenModal" for login page, whenever you decide to use presentation: "modal*/}
@@ -94,6 +96,12 @@ export default function RootLayout() {
             <Stack.Screen name="terms" />
             <Stack.Screen name="assistant" />
             <Stack.Screen name="spreadsheets" />
+            <Stack.Screen name="backup" />
+            <Stack.Screen name="vouchers" />
+            <Stack.Screen name="controls" />
+            <Stack.Screen name="contacts" />
+            <Stack.Screen name="installments" />
+            <Stack.Screen name="accounting-items" />
             <Stack.Screen name="oauth/callback" />
           </Stack>
           <StatusBar style="dark" />

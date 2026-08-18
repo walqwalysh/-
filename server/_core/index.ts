@@ -6,6 +6,7 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
+import { processInstallmentsHandler } from "../installment-scheduler";
 import { createContext } from "./context";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -61,6 +62,8 @@ async function startServer() {
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, timestamp: Date.now() });
   });
+
+  app.post("/api/scheduled/process-installments", processInstallmentsHandler);
 
   app.use(
     "/api/trpc",

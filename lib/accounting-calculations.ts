@@ -22,6 +22,18 @@ export type BalanceSheet = {
   difference: number;
   isBalanced: boolean;
 };
+export type TrialBalanceLine = {
+  accountId: string;
+  debit: number;
+  credit: number;
+};
+export type TrialBalance = {
+  lines: TrialBalanceLine[];
+  totalDebit: number;
+  totalCredit: number;
+  difference: number;
+  isBalanced: boolean;
+};
 
 const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 const safeMoney = (value: number) => Number.isFinite(value) && value > 0 ? roundMoney(value) : 0;
@@ -81,4 +93,25 @@ export function calculateBalanceSheet(totals: CategoryTotals): BalanceSheet {
   const totalLiabilitiesAndEquity = roundMoney(totalLiabilities + totalEquity);
   const difference = roundMoney(totalAssets - totalLiabilitiesAndEquity);
   return { totalAssets, totalLiabilities, totalEquity, totalLiabilitiesAndEquity, difference, isBalanced: Math.abs(difference) < 0.01 };
+}
+
+/** يبني ميزان مراجعة من حركة طرفي القيد الفعلية؛ ولا يدخل أي قيد غير متوازن. */
+export function calculateTrialBalance(accounts: CalculationAccount[], journals: CalculationJournal[]): TrialBalance {
+  const movements = Object.fromEntries(accounts.map((account) => [account.id, 0])) as Record<string, number>;
+  const accountIds = new Set(accounts.map((account) => account.id));
+  journals.forEach((journal) => {
+    if (!validateJournalLines(journal.lines).isBalanced) return;
+    journal.lines.forEach((line) => {
+      if (!accountIds.has(line.accountId)) return;
+      movements[line.accountId] = roundMoney((movements[line.accountId] ?? 0) + safeMoney(line.debit) - safeMoney(line.credit));
+    });
+  });
+  const lines = accounts.map((account) => {
+    const movement = roundMoney(movements[account.id] ?? 0);
+    return { accountId: account.id, debit: movement > 0 ? movement : 0, credit: movement < 0 ? Math.abs(movement) : 0 };
+  });
+  const totalDebit = roundMoney(lines.reduce((total, line) => total + line.debit, 0));
+  const totalCredit = roundMoney(lines.reduce((total, line) => total + line.credit, 0));
+  const difference = roundMoney(totalDebit - totalCredit);
+  return { lines, totalDebit, totalCredit, difference, isBalanced: Math.abs(difference) < 0.01 };
 }

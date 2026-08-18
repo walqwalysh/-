@@ -93,6 +93,13 @@ const config: ExpoConfig = {
       },
     ],
     [
+      "expo-image-picker",
+      {
+        photosPermission: "السماح للمحاسب الذكي باختيار صورة مستند مالي لتحليلها عند طلبك.",
+        cameraPermission: "السماح للمحاسب الذكي بالتقاط صورة مستند مالي لتحليلها عند طلبك.",
+      },
+    ],
+    [
       "expo-video",
       {
         supportsBackgroundPlayback: true,
