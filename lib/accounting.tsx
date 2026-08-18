@@ -1,26 +1,26 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { calculateAccountBalances, calculateBalanceSheet, calculateCategoryTotals, calculateNetIncome, validateJournalLines, type BalanceSheet, type CalculationLine } from "@/lib/accounting-calculations";
-import { defaultAccountNumbering, nextAccountCode, normaliseAccountNumbering, type AccountNumbering } from "@/lib/account-numbering";
+import { defaultAccountNumbering, isCodeInSubrange, nextAccountCode, normaliseAccountNumbering, normaliseSubranges, subrangeForCode, type AccountNumbering, type AccountSubrange, type NewAccountSubrange } from "@/lib/account-numbering";
 
 export type AccountCategory = "asset" | "liability" | "equity" | "revenue" | "expense";
 export type AccountNature = "debit" | "credit";
-export type Account = { id: string; code: string; name: string; category: AccountCategory; nature: AccountNature; scope: string; createdAt: string };
+export type Account = { id: string; code: string; name: string; category: AccountCategory; nature: AccountNature; scope: string; subrangeId?: string; createdAt: string };
 export type JournalLine = CalculationLine & { id: string };
 export type JournalEntry = { id: string; description: string; date: string; createdAt: string; lines: JournalLine[] };
-export type AccountingState = { accounts: Account[]; journalEntries: JournalEntry[]; currency: string; termsAccepted: boolean; numbering: AccountNumbering };
+export type AccountingState = { accounts: Account[]; journalEntries: JournalEntry[]; currency: string; termsAccepted: boolean; numbering: AccountNumbering; subranges: AccountSubrange[] };
 export type CategorySummary = Record<AccountCategory, number>;
 
 const STORAGE_KEY = "smart-accountant:data:v2";
 const LEGACY_STORAGE_KEY = "smart-accountant:data:v1";
-const emptyState: AccountingState = { accounts: [], journalEntries: [], currency: "د.ل", termsAccepted: false, numbering: defaultAccountNumbering() };
+const emptyState: AccountingState = { accounts: [], journalEntries: [], currency: "د.ل", termsAccepted: false, numbering: defaultAccountNumbering(), subranges: [] };
 const createId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const categoryIsValid = (value: unknown): value is AccountCategory => typeof value === "string" && value in categoryMeta;
 export const accountNatureFor = (category: AccountCategory): AccountNature => (category === "asset" || category === "expense" ? "debit" : "credit");
 export const accountNatureLabel = (nature: AccountNature) => (nature === "debit" ? "طبيعته مدينة" : "طبيعته دائنة");
 
 type NewJournalLine = Omit<JournalLine, "id">;
-type NewAccount = { name: string; code: string; category: AccountCategory; scope: string };
+type NewAccount = { name: string; code: string; category: AccountCategory; scope: string; subrangeId?: string };
 type ImportedJournal = { description: string; date: string; lines: Array<{ accountName: string; accountCode?: string; category: AccountCategory; debit: number; credit: number }> };
 type AccountingContextValue = {
   state: AccountingState;
@@ -32,8 +32,10 @@ type AccountingContextValue = {
   addAccount: (input: NewAccount) => Promise<Account>;
   addJournalEntry: (input: { description: string; date: string; lines: NewJournalLine[] }) => Promise<void>;
   importJournalEntries: (journals: ImportedJournal[]) => Promise<{ imported: number; skipped: number }>;
-  suggestAccountCode: (category: AccountCategory) => string;
+  suggestAccountCode: (category: AccountCategory, subrangeId?: string) => string;
   updateAccountNumbering: (numbering: AccountNumbering) => Promise<void>;
+  addSubrange: (input: NewAccountSubrange) => Promise<void>;
+  deleteSubrange: (id: string) => Promise<void>;
   updateCurrency: (currency: string) => Promise<void>;
   acceptTerms: () => Promise<void>;
   clearAllData: () => Promise<void>;
@@ -46,7 +48,7 @@ function normaliseAccount(value: unknown): Account | null {
   const account = value as Partial<Account>;
   if (!account.id || !account.name || !categoryIsValid(account.category)) return null;
   const nature = account.nature === "debit" || account.nature === "credit" ? account.nature : accountNatureFor(account.category);
-  return { id: account.id, code: typeof account.code === "string" ? account.code.trim() : "", name: account.name.trim(), category: account.category, nature, scope: typeof account.scope === "string" && account.scope.trim() ? account.scope.trim() : "عام", createdAt: typeof account.createdAt === "string" ? account.createdAt : new Date().toISOString() };
+  return { id: account.id, code: typeof account.code === "string" ? account.code.trim() : "", name: account.name.trim(), category: account.category, nature, scope: typeof account.scope === "string" && account.scope.trim() ? account.scope.trim() : "عام", subrangeId: typeof account.subrangeId === "string" ? account.subrangeId : undefined, createdAt: typeof account.createdAt === "string" ? account.createdAt : new Date().toISOString() };
 }
 
 function normaliseLoadedData(raw: string | null): AccountingState {
@@ -55,7 +57,8 @@ function normaliseLoadedData(raw: string | null): AccountingState {
     const parsed = JSON.parse(raw) as Partial<AccountingState>;
     const accounts = Array.isArray(parsed.accounts) ? parsed.accounts.map(normaliseAccount).filter((account): account is Account => Boolean(account)) : [];
     const journalEntries = Array.isArray(parsed.journalEntries) ? parsed.journalEntries.filter((entry): entry is JournalEntry => Boolean(entry?.id && Array.isArray(entry.lines) && validateJournalLines(entry.lines).isBalanced)) : [];
-    return { accounts, journalEntries, currency: typeof parsed.currency === "string" && parsed.currency.trim() ? parsed.currency : "د.ل", termsAccepted: parsed.termsAccepted === true, numbering: normaliseAccountNumbering(parsed.numbering) };
+    const subranges = normaliseSubranges(parsed.subranges);
+    return { accounts, journalEntries, currency: typeof parsed.currency === "string" && parsed.currency.trim() ? parsed.currency : "د.ل", termsAccepted: parsed.termsAccepted === true, numbering: normaliseAccountNumbering(parsed.numbering), subranges };
   } catch { return emptyState; }
 }
 
@@ -80,9 +83,14 @@ export function AccountingProvider({ children }: { children: ReactNode }) {
     if (!/^[A-Za-z0-9._-]+$/.test(code)) throw new Error("استخدم أرقاماً أو أحرفاً أو شرطات فقط في كود الحساب");
     const duplicateCode = state.accounts.find((account) => account.code.toLocaleLowerCase() === code.toLocaleLowerCase());
     if (duplicateCode) throw new Error("كود الحساب مستخدم بالفعل. اختر كوداً مختلفاً.");
+    const selectedRange = input.subrangeId ? state.subranges.find((range) => range.id === input.subrangeId && range.category === input.category) : undefined;
+    if (input.subrangeId && !selectedRange) throw new Error("النطاق الفرعي المختار غير متاح.");
+    if (selectedRange && !isCodeInSubrange(code, selectedRange)) throw new Error(`يجب أن يكون كود الحساب ضمن نطاق «${selectedRange.name}» (${selectedRange.start}–${selectedRange.end}).`);
+    const reservedRange = subrangeForCode(code, input.category, state.subranges);
+    if (reservedRange && reservedRange.id !== input.subrangeId) throw new Error(`هذا الكود محجوز للنطاق الفرعي «${reservedRange.name}». اختر النطاق الصحيح أو كوداً آخر.`);
     const existing = state.accounts.find((account) => account.category === input.category && account.name.toLocaleLowerCase() === name.toLocaleLowerCase());
     if (existing) return existing;
-    const account: Account = { id: createId("account"), code, name, category: input.category, nature: accountNatureFor(input.category), scope, createdAt: new Date().toISOString() };
+    const account: Account = { id: createId("account"), code, name, category: input.category, nature: accountNatureFor(input.category), scope, subrangeId: selectedRange?.id, createdAt: new Date().toISOString() };
     await commit({ ...state, accounts: [...state.accounts, account] });
     return account;
   }, [commit, state]);
@@ -116,15 +124,27 @@ export function AccountingProvider({ children }: { children: ReactNode }) {
     if (imported) await commit(next);
     return { imported, skipped };
   }, [commit, state]);
-  const suggestAccountCode = useCallback((category: AccountCategory) => nextAccountCode(state.accounts, category, state.numbering), [state.accounts, state.numbering]);
+  const suggestAccountCode = useCallback((category: AccountCategory, subrangeId?: string) => nextAccountCode(state.accounts, category, state.numbering, state.subranges, subrangeId), [state.accounts, state.numbering, state.subranges]);
   const updateAccountNumbering = useCallback(async (numbering: AccountNumbering) => commit({ ...state, numbering: normaliseAccountNumbering(numbering) }), [commit, state]);
+  const addSubrange = useCallback(async (input: NewAccountSubrange) => {
+    const name = input.name.trim(); const prefix = input.prefix.trim(); const start = Math.floor(Number(input.start)); const end = Math.floor(Number(input.end));
+    if (!name || !/^[A-Za-z0-9._-]*$/.test(prefix) || !Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start) throw new Error("أدخل اسماً وبادئة صحيحة ومدى رقمياً صالحاً.");
+    const conflict = state.subranges.find((range) => range.category === input.category && range.prefix === prefix && range.start <= end && range.end >= start);
+    if (conflict) throw new Error(`يتداخل المدى مع النطاق «${conflict.name}».`);
+    const subrange: AccountSubrange = { id: createId("range"), name, category: input.category, prefix, start, end, createdAt: new Date().toISOString() };
+    await commit({ ...state, subranges: [...state.subranges, subrange] });
+  }, [commit, state]);
+  const deleteSubrange = useCallback(async (id: string) => {
+    if (state.accounts.some((account) => account.subrangeId === id)) throw new Error("لا يمكن حذف نطاق مرتبط بحسابات موجودة.");
+    await commit({ ...state, subranges: state.subranges.filter((range) => range.id !== id) });
+  }, [commit, state]);
   const updateCurrency = useCallback(async (currency: string) => commit({ ...state, currency: currency.trim() || "د.ل" }), [commit, state]);
   const acceptTerms = useCallback(async () => commit({ ...state, termsAccepted: true }), [commit, state]);
-  const clearAllData = useCallback(async () => commit({ ...emptyState, currency: state.currency, termsAccepted: state.termsAccepted, numbering: state.numbering }), [commit, state.currency, state.numbering, state.termsAccepted]);
+  const clearAllData = useCallback(async () => commit({ ...emptyState, currency: state.currency, termsAccepted: state.termsAccepted, numbering: state.numbering, subranges: state.subranges }), [commit, state.currency, state.numbering, state.subranges, state.termsAccepted]);
   const accountBalances = useMemo(() => calculateAccountBalances(state.accounts, state.journalEntries), [state.accounts, state.journalEntries]);
   const summary = useMemo(() => calculateCategoryTotals(state.accounts, accountBalances), [accountBalances, state.accounts]);
   const balanceSheet = useMemo(() => calculateBalanceSheet(summary), [summary]);
-  const value = useMemo<AccountingContextValue>(() => ({ state, isReady, summary, accountBalances, netIncome: calculateNetIncome(summary), balanceSheet, addAccount, addJournalEntry, importJournalEntries, suggestAccountCode, updateAccountNumbering, updateCurrency, acceptTerms, clearAllData }), [acceptTerms, accountBalances, addAccount, addJournalEntry, balanceSheet, clearAllData, importJournalEntries, isReady, state, suggestAccountCode, summary, updateAccountNumbering, updateCurrency]);
+  const value = useMemo<AccountingContextValue>(() => ({ state, isReady, summary, accountBalances, netIncome: calculateNetIncome(summary), balanceSheet, addAccount, addJournalEntry, importJournalEntries, suggestAccountCode, updateAccountNumbering, addSubrange, deleteSubrange, updateCurrency, acceptTerms, clearAllData }), [acceptTerms, accountBalances, addAccount, addJournalEntry, addSubrange, balanceSheet, clearAllData, deleteSubrange, importJournalEntries, isReady, state, suggestAccountCode, summary, updateAccountNumbering, updateCurrency]);
   return <AccountingContext.Provider value={value}>{children}</AccountingContext.Provider>;
 }
 
