@@ -34,6 +34,18 @@ export type TrialBalance = {
   difference: number;
   isBalanced: boolean;
 };
+export type DatedCalculationJournal = CalculationJournal & { id: string; date: string; description?: string; reference?: string };
+export type GeneralLedgerLine = {
+  accountId: string;
+  journalId: string;
+  date: string;
+  description: string;
+  reference?: string;
+  debit: number;
+  credit: number;
+  runningDebit: number;
+  runningCredit: number;
+};
 
 const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 const safeMoney = (value: number) => Number.isFinite(value) && value > 0 ? roundMoney(value) : 0;
@@ -114,4 +126,38 @@ export function calculateTrialBalance(accounts: CalculationAccount[], journals: 
   const totalCredit = roundMoney(lines.reduce((total, line) => total + line.credit, 0));
   const difference = roundMoney(totalDebit - totalCredit);
   return { lines, totalDebit, totalCredit, difference, isBalanced: Math.abs(difference) < 0.01 };
+}
+
+/** يبني دفتر أستاذ من القيود المتوازنة فقط؛ ويُبقي الرصيد الجاري في عمود مدين أو دائن. */
+export function calculateGeneralLedger(accounts: CalculationAccount[], journals: DatedCalculationJournal[]) {
+  const accountIds = new Set(accounts.map((account) => account.id));
+  const ledgers = Object.fromEntries(accounts.map((account) => [account.id, [] as GeneralLedgerLine[]])) as Record<string, GeneralLedgerLine[]>;
+  const runningBalances = Object.fromEntries(accounts.map((account) => [account.id, 0])) as Record<string, number>;
+
+  journals
+    .map((journal, index) => ({ journal, index }))
+    .sort((left, right) => left.journal.date.localeCompare(right.journal.date) || left.index - right.index)
+    .forEach(({ journal }) => {
+      if (!validateJournalLines(journal.lines).isBalanced) return;
+      journal.lines.forEach((line) => {
+        if (!accountIds.has(line.accountId)) return;
+        const debit = safeMoney(line.debit);
+        const credit = safeMoney(line.credit);
+        const running = roundMoney((runningBalances[line.accountId] ?? 0) + debit - credit);
+        runningBalances[line.accountId] = running;
+        ledgers[line.accountId].push({
+          accountId: line.accountId,
+          journalId: journal.id,
+          date: journal.date,
+          description: journal.description ?? "قيد محاسبي",
+          reference: journal.reference,
+          debit,
+          credit,
+          runningDebit: running > 0 ? running : 0,
+          runningCredit: running < 0 ? Math.abs(running) : 0,
+        });
+      });
+    });
+
+  return ledgers;
 }

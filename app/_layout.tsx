@@ -102,6 +102,9 @@ export default function RootLayout() {
             <Stack.Screen name="contacts" />
             <Stack.Screen name="installments" />
             <Stack.Screen name="accounting-items" />
+            <Stack.Screen name="business" />
+            <Stack.Screen name="operations-reports" />
+            <Stack.Screen name="ledger" />
             <Stack.Screen name="oauth/callback" />
           </Stack>
           <StatusBar style="dark" />
