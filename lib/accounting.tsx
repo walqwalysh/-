@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 
 import { calculateAccountBalances, calculateBalanceSheet, calculateCategoryTotals, calculateNetIncome, validateJournalLines, type BalanceSheet, type CalculationLine } from "@/lib/accounting-calculations";
 import { defaultAccountNumbering, isCodeInSubrange, nextAccountCode, normaliseAccountNumbering, normaliseSubranges, subrangeForCode, type AccountNumbering, type AccountSubrange, type NewAccountSubrange } from "@/lib/account-numbering";
+import { normaliseDateOnly } from "@/lib/date-utils";
 
 export type AccountCategory = "asset" | "liability" | "equity" | "revenue" | "expense";
 export type AccountNature = "debit" | "credit";
@@ -68,7 +69,7 @@ const createId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().to
 const categoryIsValid = (value: unknown): value is AccountCategory => typeof value === "string" && value in categoryMeta;
 const contactTypeIsValid = (value: unknown): value is ContactType => value === "customer" || value === "supplier" || value === "debtor" || value === "creditor";
 const installmentStatusIsValid = (value: unknown): value is InstallmentStatus => value === "active" || value === "paused" || value === "completed";
-const isDateOnly = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(new Date(`${value}T00:00:00.000Z`).getTime());
+const isDateOnly = (value: string) => normaliseDateOnly(value) === value;
 
 export const accountNatureFor = (category: AccountCategory): AccountNature => (category === "asset" || category === "expense" ? "debit" : "credit");
 export const accountNatureLabel = (nature: AccountNature) => (nature === "debit" ? "طبيعته مدينة" : "طبيعته دائنة");
@@ -161,9 +162,10 @@ function normaliseJournalEntrySource(value: unknown): JournalEntrySource | undef
 function normaliseJournalEntry(value: unknown): JournalEntry | null {
   if (!value || typeof value !== "object") return null;
   const entry = value as Partial<JournalEntry>;
-  if (!entry.id || typeof entry.description !== "string" || !entry.description.trim() || typeof entry.date !== "string" || !isDateOnly(entry.date) || !Array.isArray(entry.lines) || !validateJournalLines(entry.lines).isBalanced) return null;
+  const journalDate = normaliseDateOnly(entry.date);
+  if (!entry.id || typeof entry.description !== "string" || !entry.description.trim() || !journalDate || !Array.isArray(entry.lines) || !validateJournalLines(entry.lines).isBalanced) return null;
   const fxRate = Number(entry.fxRate);
-  return { id: entry.id, description: entry.description.trim(), date: entry.date, createdAt: typeof entry.createdAt === "string" ? entry.createdAt : new Date().toISOString(), lines: entry.lines as JournalLine[], source: normaliseJournalEntrySource(entry.source), currency: typeof entry.currency === "string" && entry.currency.trim() ? entry.currency.trim() : undefined, fxRate: Number.isFinite(fxRate) && fxRate > 0 ? fxRate : undefined, documentReference: typeof entry.documentReference === "string" && entry.documentReference.trim() ? entry.documentReference.trim() : undefined, costCenterId: typeof entry.costCenterId === "string" && entry.costCenterId.trim() ? entry.costCenterId : undefined, reversalOfEntryId: typeof entry.reversalOfEntryId === "string" && entry.reversalOfEntryId.trim() ? entry.reversalOfEntryId : undefined };
+  return { id: entry.id, description: entry.description.trim(), date: journalDate, createdAt: typeof entry.createdAt === "string" ? entry.createdAt : new Date().toISOString(), lines: entry.lines as JournalLine[], source: normaliseJournalEntrySource(entry.source), currency: typeof entry.currency === "string" && entry.currency.trim() ? entry.currency.trim() : undefined, fxRate: Number.isFinite(fxRate) && fxRate > 0 ? fxRate : undefined, documentReference: typeof entry.documentReference === "string" && entry.documentReference.trim() ? entry.documentReference.trim() : undefined, costCenterId: typeof entry.costCenterId === "string" && entry.costCenterId.trim() ? entry.costCenterId : undefined, reversalOfEntryId: typeof entry.reversalOfEntryId === "string" && entry.reversalOfEntryId.trim() ? entry.reversalOfEntryId : undefined };
 }
 
 function normaliseCostCenter(value: unknown): CostCenter | null {
@@ -177,8 +179,9 @@ function normaliseVoucher(value: unknown): Voucher | null {
   if (!value || typeof value !== "object") return null;
   const voucher = value as Partial<Voucher>;
   const amount = Number(voucher.amount);
-  if (!voucher.id || typeof voucher.voucherNumber !== "string" || (voucher.type !== "receipt" && voucher.type !== "payment") || !voucher.partyName?.trim() || !Number.isFinite(amount) || amount <= 0 || !voucher.date || !isDateOnly(voucher.date) || !voucher.description?.trim() || !voucher.cashAccountId || !voucher.counterpartAccountId || !voucher.journalEntryId) return null;
-  return { id: voucher.id, voucherNumber: voucher.voucherNumber, type: voucher.type, paymentMethod: voucher.paymentMethod === "cash" || voucher.paymentMethod === "cheque" || voucher.paymentMethod === "bank_transfer" || voucher.paymentMethod === "other" ? voucher.paymentMethod : "cash", partyName: voucher.partyName.trim(), amount: Number(amount.toFixed(2)), date: voucher.date, description: voucher.description.trim(), cashAccountId: voucher.cashAccountId, counterpartAccountId: voucher.counterpartAccountId, journalEntryId: voucher.journalEntryId, createdAt: typeof voucher.createdAt === "string" ? voucher.createdAt : new Date().toISOString() };
+  const voucherDate = normaliseDateOnly(voucher.date);
+  if (!voucher.id || typeof voucher.voucherNumber !== "string" || (voucher.type !== "receipt" && voucher.type !== "payment") || !voucher.partyName?.trim() || !Number.isFinite(amount) || amount <= 0 || !voucherDate || !voucher.description?.trim() || !voucher.cashAccountId || !voucher.counterpartAccountId || !voucher.journalEntryId) return null;
+  return { id: voucher.id, voucherNumber: voucher.voucherNumber, type: voucher.type, paymentMethod: voucher.paymentMethod === "cash" || voucher.paymentMethod === "cheque" || voucher.paymentMethod === "bank_transfer" || voucher.paymentMethod === "other" ? voucher.paymentMethod : "cash", partyName: voucher.partyName.trim(), amount: Number(amount.toFixed(2)), date: voucherDate, description: voucher.description.trim(), cashAccountId: voucher.cashAccountId, counterpartAccountId: voucher.counterpartAccountId, journalEntryId: voucher.journalEntryId, createdAt: typeof voucher.createdAt === "string" ? voucher.createdAt : new Date().toISOString() };
 }
 
 function normaliseAuditLog(value: unknown): AuditLog | null {
@@ -256,6 +259,7 @@ export function AccountingProvider({ children }: { children: ReactNode }) {
   const addJournalEntry = useCallback(async (input: { description: string; date: string; lines: NewJournalLine[]; source?: JournalEntrySource; currency?: string; fxRate?: number; documentReference?: string; costCenterId?: string }) => {
     const knownAccounts = new Map(state.accounts.map((account) => [account.id, account]));
     const lines = input.lines.map((line) => ({ ...line, id: createId("line"), debit: Number(Number(line.debit).toFixed(2)), credit: Number(Number(line.credit).toFixed(2)) }));
+    const journalDate = normaliseDateOnly(input.date);
     if (!input.description.trim()) throw new Error("أدخل وصف القيد");
     const installmentSource = input.source?.type === "installment" ? input.source : undefined;
     if (installmentSource && state.journalEntries.some((entry) => {
@@ -264,13 +268,13 @@ export function AccountingProvider({ children }: { children: ReactNode }) {
     })) return;
     if (lines.some((line) => !knownAccounts.has(line.accountId) || knownAccounts.get(line.accountId)?.category !== line.category)) throw new Error("اختر حسابات صحيحة لكل طرف من القيد");
     if (new Set(lines.map((line) => line.accountId)).size < 2) throw new Error("اختر حسابين مختلفين للطرف المدين والدائن");
-    if (!isDateOnly(input.date)) throw new Error("أدخل تاريخ قيد صحيحاً.");
+    if (!journalDate) throw new Error("أدخل تاريخ قيد صحيحاً.");
     if (input.costCenterId && !state.costCenters.some((center) => center.id === input.costCenterId)) throw new Error("مركز التكلفة المختار غير موجود.");
     const fxRate = input.fxRate === undefined ? 1 : Number(input.fxRate);
     if (!Number.isFinite(fxRate) || fxRate <= 0) throw new Error("أدخل سعر صرف صحيحاً أكبر من صفر.");
     const check = validateJournalLines(lines);
     if (!check.isBalanced) throw new Error(`القيد غير متوازن. الفرق الحالي: ${formatAmount(Math.abs(check.difference), state.currency)}`);
-    const entry: JournalEntry = { id: createId("journal"), description: input.description.trim(), date: input.date, createdAt: new Date().toISOString(), lines, source: input.source, currency: input.currency?.trim() || state.currency, fxRate, documentReference: input.documentReference?.trim() || undefined, costCenterId: input.costCenterId };
+    const entry: JournalEntry = { id: createId("journal"), description: input.description.trim(), date: journalDate, createdAt: new Date().toISOString(), lines, source: input.source, currency: input.currency?.trim() || state.currency, fxRate, documentReference: input.documentReference?.trim() || undefined, costCenterId: input.costCenterId };
     await commit({ ...state, journalEntries: [entry, ...state.journalEntries], auditLog: [newAuditLog("journal_posted", `ترحيل قيد محاسبي: ${entry.description}`, entry.id), ...state.auditLog] });
   }, [commit, state]);
 
@@ -288,7 +292,9 @@ export function AccountingProvider({ children }: { children: ReactNode }) {
         mappedLines.push({ id: createId("line"), accountId: account.id, category: account.category, debit: Number(Number(source.debit).toFixed(2)), credit: Number(Number(source.credit).toFixed(2)) });
       }
       if (invalid || !validateJournalLines(mappedLines).isBalanced || new Set(mappedLines.map((line) => line.accountId)).size < 2) { skipped += 1; continue; }
-      next.journalEntries.unshift({ id: createId("journal"), description: journal.description.trim(), date: journal.date || new Date().toISOString(), createdAt: new Date().toISOString(), lines: mappedLines }); imported += 1;
+      const journalDate = normaliseDateOnly(journal.date) ?? normaliseDateOnly(new Date().toISOString());
+      if (!journalDate) { skipped += 1; continue; }
+      next.journalEntries.unshift({ id: createId("journal"), description: journal.description.trim(), date: journalDate, createdAt: new Date().toISOString(), lines: mappedLines }); imported += 1;
     }
     if (imported) await commit({ ...next, auditLog: [newAuditLog("journal_imported", `استيراد ${imported} قيد محاسبي من ملف Excel.`), ...state.auditLog] });
     return { imported, skipped };
@@ -373,18 +379,19 @@ export function AccountingProvider({ children }: { children: ReactNode }) {
 
   const createVoucher = useCallback(async (input: NewVoucher) => {
     const amount = Number(input.amount); const partyName = input.partyName.trim(); const description = input.description.trim();
-    if (!partyName || !description || !isDateOnly(input.date) || !Number.isFinite(amount) || amount <= 0) throw new Error("أكمل بيانات السند ومبلغه وتاريخه بشكل صحيح.");
+    const voucherDate = normaliseDateOnly(input.date);
+    if (!partyName || !description || !voucherDate || !Number.isFinite(amount) || amount <= 0) throw new Error("أكمل بيانات السند ومبلغه وتاريخه بشكل صحيح.");
     const cashAccount = state.accounts.find((account) => account.id === input.cashAccountId);
     const counterpartAccount = state.accounts.find((account) => account.id === input.counterpartAccountId);
     if (!cashAccount || !counterpartAccount || cashAccount.id === counterpartAccount.id) throw new Error("اختر حسابي سند مختلفين وصحيحين.");
     if (input.costCenterId && !state.costCenters.some((center) => center.id === input.costCenterId)) throw new Error("مركز التكلفة المختار غير موجود.");
     const fxRate = input.fxRate === undefined ? 1 : Number(input.fxRate);
     if (!Number.isFinite(fxRate) || fxRate <= 0) throw new Error("أدخل سعر صرف صحيحاً أكبر من صفر.");
-    const voucher: Voucher = { id: createId("voucher"), voucherNumber: `${input.type === "receipt" ? "RC" : "PV"}-${new Date().getFullYear()}-${String(state.vouchers.length + 1).padStart(4, "0")}`, type: input.type, paymentMethod: input.paymentMethod, partyName, amount: Number(amount.toFixed(2)), date: input.date, description, cashAccountId: cashAccount.id, counterpartAccountId: counterpartAccount.id, journalEntryId: "", createdAt: new Date().toISOString() };
+    const voucher: Voucher = { id: createId("voucher"), voucherNumber: `${input.type === "receipt" ? "RC" : "PV"}-${new Date().getFullYear()}-${String(state.vouchers.length + 1).padStart(4, "0")}`, type: input.type, paymentMethod: input.paymentMethod, partyName, amount: Number(amount.toFixed(2)), date: voucherDate, description, cashAccountId: cashAccount.id, counterpartAccountId: counterpartAccount.id, journalEntryId: "", createdAt: new Date().toISOString() };
     const lines: JournalLine[] = input.type === "receipt"
       ? [{ id: createId("line"), accountId: cashAccount.id, category: cashAccount.category, debit: voucher.amount, credit: 0 }, { id: createId("line"), accountId: counterpartAccount.id, category: counterpartAccount.category, debit: 0, credit: voucher.amount }]
       : [{ id: createId("line"), accountId: counterpartAccount.id, category: counterpartAccount.category, debit: voucher.amount, credit: 0 }, { id: createId("line"), accountId: cashAccount.id, category: cashAccount.category, debit: 0, credit: voucher.amount }];
-    const journalEntry: JournalEntry = { id: createId("journal"), description, date: input.date, createdAt: new Date().toISOString(), lines, source: { type: "voucher", voucherId: voucher.id, voucherType: voucher.type }, currency: input.currency?.trim() || state.currency, fxRate, documentReference: voucher.voucherNumber, costCenterId: input.costCenterId };
+    const journalEntry: JournalEntry = { id: createId("journal"), description, date: voucherDate, createdAt: new Date().toISOString(), lines, source: { type: "voucher", voucherId: voucher.id, voucherType: voucher.type }, currency: input.currency?.trim() || state.currency, fxRate, documentReference: voucher.voucherNumber, costCenterId: input.costCenterId };
     voucher.journalEntryId = journalEntry.id;
     await commit({ ...state, vouchers: [voucher, ...state.vouchers], journalEntries: [journalEntry, ...state.journalEntries], auditLog: [newAuditLog("voucher_created", `إصدار ${voucher.type === "receipt" ? "سند قبض" : "سند صرف"} ${voucher.voucherNumber}`, voucher.id), ...state.auditLog] });
     return voucher;
@@ -392,10 +399,10 @@ export function AccountingProvider({ children }: { children: ReactNode }) {
 
   const reverseJournalEntry = useCallback(async (id: string, date?: string) => {
     const entry = state.journalEntries.find((candidate) => candidate.id === id);
-    const reversalDate = date ?? new Date().toISOString().slice(0, 10);
+    const reversalDate = normaliseDateOnly(date ?? new Date().toISOString());
     if (!entry) throw new Error("القيد غير موجود.");
     if (entry.source?.type === "installment") throw new Error("لا يمكن عكس قيد قسط من التطبيق. عالجه من سجل القسط للحفاظ على التزامن.");
-    if (!isDateOnly(reversalDate)) throw new Error("أدخل تاريخاً صحيحاً للقيد العكسي.");
+    if (!reversalDate) throw new Error("أدخل تاريخاً صحيحاً للقيد العكسي.");
     if (state.journalEntries.some((candidate) => candidate.source?.type === "reversal" && candidate.source.originalEntryId === id)) throw new Error("يوجد قيد عكسي لهذا القيد بالفعل.");
     const reversing: JournalEntry = { id: createId("journal"), description: `قيد عكسي: ${entry.description}`, date: reversalDate, createdAt: new Date().toISOString(), lines: entry.lines.map((line) => ({ ...line, id: createId("line"), debit: line.credit, credit: line.debit })), source: { type: "reversal", originalEntryId: entry.id }, currency: entry.currency, fxRate: entry.fxRate, documentReference: entry.documentReference ? `REV-${entry.documentReference}` : undefined, costCenterId: entry.costCenterId, reversalOfEntryId: entry.id };
     await commit({ ...state, journalEntries: [reversing, ...state.journalEntries], auditLog: [newAuditLog("journal_reversed", `عكس القيد: ${entry.description}`, reversing.id), ...state.auditLog] });
