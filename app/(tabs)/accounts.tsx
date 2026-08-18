@@ -6,7 +6,7 @@ import { EmptyState, IconCircle, PrimaryButton } from "@/components/accounting-u
 import { AccountCategory, categories, categoryMeta, formatAmount, useAccounting } from "@/lib/accounting";
 
 export default function AccountsScreen() {
-  const { state, summary, addAccount } = useAccounting();
+  const { state, accountBalances, addAccount } = useAccounting();
   const [modalOpen, setModalOpen] = useState(false);
   const [name, setName] = useState("");
   const [category, setCategory] = useState<AccountCategory>("asset");
@@ -19,7 +19,7 @@ export default function AccountsScreen() {
   return (
     <ScreenContainer className="px-4" containerClassName="bg-background">
       <View style={styles.header}><View><Text style={styles.eyebrow}>دليل الحسابات</Text><Text style={styles.title}>حساباتي</Text></View><Pressable onPress={() => setModalOpen(true)} style={({ pressed }) => [styles.addSquare, pressed && styles.pressed]}><MaterialIcons name="add" size={24} color="#FFFFFF" /></Pressable></View>
-      <FlatList data={state.accounts} keyExtractor={(item) => item.id} showsVerticalScrollIndicator={false} contentContainerStyle={state.accounts.length ? styles.list : styles.emptyList} ListEmptyComponent={<EmptyState icon="account-balance-wallet" title="لا توجد حسابات بعد" description="أنشئ حساباً أولاً، مثل النقدية أو المبيعات، ثم أضف الحركات المرتبطة به." />} renderItem={({ item }) => { const meta = categoryMeta[item.category]; return <View style={styles.accountCard}><IconCircle icon={meta.icon as "account-balance-wallet"} color={meta.color} background={meta.softColor} /><View style={styles.accountInfo}><Text style={styles.accountName}>{item.name}</Text><Text style={styles.accountCategory}>{meta.label}</Text></View><Text style={[styles.balance, { color: meta.color }]}>{formatAmount(summary[item.category], state.currency)}</Text></View>; }} />
+      <FlatList data={state.accounts} keyExtractor={(item) => item.id} showsVerticalScrollIndicator={false} contentContainerStyle={state.accounts.length ? styles.list : styles.emptyList} ListEmptyComponent={<EmptyState icon="account-balance-wallet" title="لا توجد حسابات بعد" description="أنشئ حساباً أولاً، مثل النقدية أو المبيعات، ثم أضف الحركات المرتبطة به." />} renderItem={({ item }) => { const meta = categoryMeta[item.category]; return <View style={styles.accountCard}><IconCircle icon={meta.icon as "account-balance-wallet"} color={meta.color} background={meta.softColor} /><View style={styles.accountInfo}><Text style={styles.accountName}>{item.name}</Text><Text style={styles.accountCategory}>{meta.label}</Text></View><Text style={[styles.balance, { color: meta.color }]}>{formatAmount(accountBalances[item.id] ?? 0, state.currency)}</Text></View>; }} />
       <Modal visible={modalOpen} animationType="slide" transparent onRequestClose={() => setModalOpen(false)}>
         <View style={styles.overlay}>
           <View style={styles.sheet}>

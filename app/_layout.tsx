@@ -90,6 +90,10 @@ export default function RootLayout() {
           <Stack screenOptions={{ headerShown: false }}>
             <Stack.Screen name="(tabs)" />
             <Stack.Screen name="settings" />
+            <Stack.Screen name="profile" />
+            <Stack.Screen name="terms" />
+            <Stack.Screen name="assistant" />
+            <Stack.Screen name="spreadsheets" />
             <Stack.Screen name="oauth/callback" />
           </Stack>
           <StatusBar style="dark" />
