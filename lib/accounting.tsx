@@ -1,18 +1,19 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { calculateAccountBalances, calculateBalanceSheet, calculateCategoryTotals, calculateNetIncome, validateJournalLines, type BalanceSheet, type CalculationLine } from "@/lib/accounting-calculations";
+import { defaultAccountNumbering, nextAccountCode, normaliseAccountNumbering, type AccountNumbering } from "@/lib/account-numbering";
 
 export type AccountCategory = "asset" | "liability" | "equity" | "revenue" | "expense";
 export type AccountNature = "debit" | "credit";
 export type Account = { id: string; code: string; name: string; category: AccountCategory; nature: AccountNature; scope: string; createdAt: string };
 export type JournalLine = CalculationLine & { id: string };
 export type JournalEntry = { id: string; description: string; date: string; createdAt: string; lines: JournalLine[] };
-export type AccountingState = { accounts: Account[]; journalEntries: JournalEntry[]; currency: string; termsAccepted: boolean };
+export type AccountingState = { accounts: Account[]; journalEntries: JournalEntry[]; currency: string; termsAccepted: boolean; numbering: AccountNumbering };
 export type CategorySummary = Record<AccountCategory, number>;
 
 const STORAGE_KEY = "smart-accountant:data:v2";
 const LEGACY_STORAGE_KEY = "smart-accountant:data:v1";
-const emptyState: AccountingState = { accounts: [], journalEntries: [], currency: "د.ل", termsAccepted: false };
+const emptyState: AccountingState = { accounts: [], journalEntries: [], currency: "د.ل", termsAccepted: false, numbering: defaultAccountNumbering() };
 const createId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const categoryIsValid = (value: unknown): value is AccountCategory => typeof value === "string" && value in categoryMeta;
 export const accountNatureFor = (category: AccountCategory): AccountNature => (category === "asset" || category === "expense" ? "debit" : "credit");
@@ -31,6 +32,8 @@ type AccountingContextValue = {
   addAccount: (input: NewAccount) => Promise<Account>;
   addJournalEntry: (input: { description: string; date: string; lines: NewJournalLine[] }) => Promise<void>;
   importJournalEntries: (journals: ImportedJournal[]) => Promise<{ imported: number; skipped: number }>;
+  suggestAccountCode: (category: AccountCategory) => string;
+  updateAccountNumbering: (numbering: AccountNumbering) => Promise<void>;
   updateCurrency: (currency: string) => Promise<void>;
   acceptTerms: () => Promise<void>;
   clearAllData: () => Promise<void>;
@@ -52,7 +55,7 @@ function normaliseLoadedData(raw: string | null): AccountingState {
     const parsed = JSON.parse(raw) as Partial<AccountingState>;
     const accounts = Array.isArray(parsed.accounts) ? parsed.accounts.map(normaliseAccount).filter((account): account is Account => Boolean(account)) : [];
     const journalEntries = Array.isArray(parsed.journalEntries) ? parsed.journalEntries.filter((entry): entry is JournalEntry => Boolean(entry?.id && Array.isArray(entry.lines) && validateJournalLines(entry.lines).isBalanced)) : [];
-    return { accounts, journalEntries, currency: typeof parsed.currency === "string" && parsed.currency.trim() ? parsed.currency : "د.ل", termsAccepted: parsed.termsAccepted === true };
+    return { accounts, journalEntries, currency: typeof parsed.currency === "string" && parsed.currency.trim() ? parsed.currency : "د.ل", termsAccepted: parsed.termsAccepted === true, numbering: normaliseAccountNumbering(parsed.numbering) };
   } catch { return emptyState; }
 }
 
@@ -113,13 +116,15 @@ export function AccountingProvider({ children }: { children: ReactNode }) {
     if (imported) await commit(next);
     return { imported, skipped };
   }, [commit, state]);
+  const suggestAccountCode = useCallback((category: AccountCategory) => nextAccountCode(state.accounts, category, state.numbering), [state.accounts, state.numbering]);
+  const updateAccountNumbering = useCallback(async (numbering: AccountNumbering) => commit({ ...state, numbering: normaliseAccountNumbering(numbering) }), [commit, state]);
   const updateCurrency = useCallback(async (currency: string) => commit({ ...state, currency: currency.trim() || "د.ل" }), [commit, state]);
   const acceptTerms = useCallback(async () => commit({ ...state, termsAccepted: true }), [commit, state]);
-  const clearAllData = useCallback(async () => commit({ ...emptyState, currency: state.currency, termsAccepted: state.termsAccepted }), [commit, state.currency, state.termsAccepted]);
+  const clearAllData = useCallback(async () => commit({ ...emptyState, currency: state.currency, termsAccepted: state.termsAccepted, numbering: state.numbering }), [commit, state.currency, state.numbering, state.termsAccepted]);
   const accountBalances = useMemo(() => calculateAccountBalances(state.accounts, state.journalEntries), [state.accounts, state.journalEntries]);
   const summary = useMemo(() => calculateCategoryTotals(state.accounts, accountBalances), [accountBalances, state.accounts]);
   const balanceSheet = useMemo(() => calculateBalanceSheet(summary), [summary]);
-  const value = useMemo<AccountingContextValue>(() => ({ state, isReady, summary, accountBalances, netIncome: calculateNetIncome(summary), balanceSheet, addAccount, addJournalEntry, importJournalEntries, updateCurrency, acceptTerms, clearAllData }), [acceptTerms, accountBalances, addAccount, addJournalEntry, balanceSheet, clearAllData, importJournalEntries, isReady, state, summary, updateCurrency]);
+  const value = useMemo<AccountingContextValue>(() => ({ state, isReady, summary, accountBalances, netIncome: calculateNetIncome(summary), balanceSheet, addAccount, addJournalEntry, importJournalEntries, suggestAccountCode, updateAccountNumbering, updateCurrency, acceptTerms, clearAllData }), [acceptTerms, accountBalances, addAccount, addJournalEntry, balanceSheet, clearAllData, importJournalEntries, isReady, state, suggestAccountCode, summary, updateAccountNumbering, updateCurrency]);
   return <AccountingContext.Provider value={value}>{children}</AccountingContext.Provider>;
 }
 
