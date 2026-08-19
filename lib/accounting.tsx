@@ -202,6 +202,7 @@ type AccountingContextValue = {
   addBankReconciliation: (input: NewBankReconciliation) => Promise<BankReconciliation>;
   updateBankReconciliation: (id: string, input: NewBankReconciliation) => Promise<BankReconciliation>;
   addReconciliationLine: (reconciliationId: string, input: NewBankStatementLine) => Promise<BankStatementLine>;
+  addReconciliationLines: (reconciliationId: string, inputs: NewBankStatementLine[]) => Promise<BankStatementLine[]>;
   updateReconciliationLine: (reconciliationId: string, lineId: string, patch: BankReconciliationLinePatch) => Promise<void>;
   deleteBankReconciliation: (id: string) => Promise<void>;
   addBudget: (input: NewBudget) => Promise<Budget>;
@@ -825,6 +826,21 @@ export function AccountingProvider({ children }: { children: ReactNode }) {
     return line;
   }, [commit, state]);
 
+  const addReconciliationLines = useCallback(async (reconciliationId: string, inputs: NewBankStatementLine[]) => {
+    const reconciliation = state.bankReconciliations.find((candidate) => candidate.id === reconciliationId);
+    if (!reconciliation) throw new Error("كشف المطابقة غير موجود.");
+    if (!inputs.length) throw new Error("لا توجد سطور صالحة لاستيرادها.");
+    if (inputs.length > 5_000) throw new Error("يتجاوز الملف الحد الآمن للاستيراد دفعة واحدة (5000 سطر).");
+    const lines = inputs.map((input) => {
+      const date = normaliseDateOnly(input.date); const description = input.description.trim(); const amount = Number(input.amount);
+      if (!date || date < reconciliation.periodStart || date > reconciliation.periodEnd || !description || !Number.isFinite(amount) || amount === 0) throw new Error("يحتوي الملف على سطر غير صالح أو خارج فترة الكشف؛ لم تُحفظ أي بيانات.");
+      return { id: createId("statement-line"), date, description, amount: Number(amount.toFixed(2)), reference: input.reference?.trim() || undefined, status: "unmatched" as const };
+    });
+    const updated = { ...reconciliation, lines: [...reconciliation.lines, ...lines], updatedAt: new Date().toISOString() };
+    await commit({ ...state, bankReconciliations: state.bankReconciliations.map((candidate) => candidate.id === reconciliationId ? updated : candidate), auditLog: [newAuditLog("bank_reconciliation_updated", `استيراد ${lines.length.toLocaleString("ar-LY")} سطر من كشف البنك`, reconciliationId), ...state.auditLog] });
+    return lines;
+  }, [commit, state]);
+
   const updateReconciliationLine = useCallback(async (reconciliationId: string, lineId: string, patch: BankReconciliationLinePatch) => {
     const reconciliation = state.bankReconciliations.find((candidate) => candidate.id === reconciliationId);
     const current = reconciliation?.lines.find((line) => line.id === lineId);
@@ -930,7 +946,7 @@ export function AccountingProvider({ children }: { children: ReactNode }) {
   const summary = useMemo(() => calculateCategoryTotals(state.accounts, accountBalances), [accountBalances, state.accounts]);
   const balanceSheet = useMemo(() => calculateBalanceSheet(summary), [summary]);
   useEffect(() => { setActiveNumberLocale(state.numberLocale); }, [state.numberLocale]);
-  const value = useMemo<AccountingContextValue>(() => ({ state, isReady, summary, accountBalances, netIncome: calculateNetIncome(summary), balanceSheet, addAccount, addJournalEntry, importJournalEntries, addContact, deleteContact, addAccountingItem, deleteAccountingItem, addInstallment, updateInstallmentStatus, updateInstallmentSchedule, deleteInstallment, addCostCenter, deleteCostCenter, createVoucher, createCommercialDocument, postCommercialDocument, addInventoryItem, recordInventoryMovement, addEmployee, createPayrollRun, postPayrollRun, addFixedAsset, recordMonthlyDepreciation, addCashBankAccount, createCashBankTransaction, transferCashBankFunds, addBankReconciliation, updateBankReconciliation, addReconciliationLine, updateReconciliationLine, deleteBankReconciliation, addBudget, addBudgetLine, reverseJournalEntry, suggestAccountCode, updateAccountNumbering, addSubrange, deleteSubrange, updateCurrency, addCurrency, deleteCurrency, updateNumberLocale, acceptTerms, exportBackup, restoreBackup, clearAllData }), [acceptTerms, accountBalances, addAccount, addAccountingItem, addBankReconciliation, addBudget, addBudgetLine, addCashBankAccount, addContact, addCostCenter, addCurrency, addEmployee, addFixedAsset, addInstallment, addInventoryItem, addJournalEntry, addReconciliationLine, addSubrange, balanceSheet, clearAllData, createCashBankTransaction, createCommercialDocument, createPayrollRun, createVoucher, deleteAccountingItem, deleteBankReconciliation, deleteContact, deleteCostCenter, deleteCurrency, deleteInstallment, deleteSubrange, exportBackup, importJournalEntries, isReady, postCommercialDocument, postPayrollRun, recordInventoryMovement, recordMonthlyDepreciation, restoreBackup, reverseJournalEntry, state, suggestAccountCode, summary, transferCashBankFunds, updateAccountNumbering, updateBankReconciliation, updateCurrency, updateInstallmentSchedule, updateInstallmentStatus, updateNumberLocale, updateReconciliationLine]);
+  const value = useMemo<AccountingContextValue>(() => ({ state, isReady, summary, accountBalances, netIncome: calculateNetIncome(summary), balanceSheet, addAccount, addJournalEntry, importJournalEntries, addContact, deleteContact, addAccountingItem, deleteAccountingItem, addInstallment, updateInstallmentStatus, updateInstallmentSchedule, deleteInstallment, addCostCenter, deleteCostCenter, createVoucher, createCommercialDocument, postCommercialDocument, addInventoryItem, recordInventoryMovement, addEmployee, createPayrollRun, postPayrollRun, addFixedAsset, recordMonthlyDepreciation, addCashBankAccount, createCashBankTransaction, transferCashBankFunds, addBankReconciliation, updateBankReconciliation, addReconciliationLine, addReconciliationLines, updateReconciliationLine, deleteBankReconciliation, addBudget, addBudgetLine, reverseJournalEntry, suggestAccountCode, updateAccountNumbering, addSubrange, deleteSubrange, updateCurrency, addCurrency, deleteCurrency, updateNumberLocale, acceptTerms, exportBackup, restoreBackup, clearAllData }), [acceptTerms, accountBalances, addAccount, addAccountingItem, addBankReconciliation, addBudget, addBudgetLine, addCashBankAccount, addContact, addCostCenter, addCurrency, addEmployee, addFixedAsset, addInstallment, addInventoryItem, addJournalEntry, addReconciliationLine, addReconciliationLines, addSubrange, balanceSheet, clearAllData, createCashBankTransaction, createCommercialDocument, createPayrollRun, createVoucher, deleteAccountingItem, deleteBankReconciliation, deleteContact, deleteCostCenter, deleteCurrency, deleteInstallment, deleteSubrange, exportBackup, importJournalEntries, isReady, postCommercialDocument, postPayrollRun, recordInventoryMovement, recordMonthlyDepreciation, restoreBackup, reverseJournalEntry, state, suggestAccountCode, summary, transferCashBankFunds, updateAccountNumbering, updateBankReconciliation, updateCurrency, updateInstallmentSchedule, updateInstallmentStatus, updateNumberLocale, updateReconciliationLine]);
   return <AccountingContext.Provider value={value}>{children}</AccountingContext.Provider>;
 }
 
