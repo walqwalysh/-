@@ -1,11 +1,16 @@
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { useRouter } from "expo-router";
+import * as FileSystem from "expo-file-system/legacy";
+import * as Sharing from "expo-sharing";
 import { useState } from "react";
-import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, FlatList, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 
+import { PrimaryButton } from "@/components/accounting-ui";
 import { ScreenContainer } from "@/components/screen-container";
+import { createReportsWorkbook, reportExportFilename } from "@/lib/excel-reports";
 import { calculateOperationalReports } from "@/lib/operational-reports";
 import { useAccounting } from "@/lib/accounting";
+import * as XLSX from "xlsx";
 
 type ReportSection = "overview" | "inventory" | "assets";
 const tabs: { id: ReportSection; label: string; icon: keyof typeof MaterialIcons.glyphMap }[] = [
@@ -29,6 +34,18 @@ export default function OperationsReportsScreen() {
     vouchers: state.vouchers,
   });
   const [active, setActive] = useState<ReportSection>("overview");
+  async function exportReports() {
+    try {
+      if (Platform.OS === "web") { Alert.alert("التصدير على الويب", "استخدم التطبيق على Android أو iOS لمشاركة ملف Excel من جهازك."); return; }
+      const directory = FileSystem.cacheDirectory;
+      if (!directory) throw new Error("لا يتوفر مسار لحفظ الملف على الجهاز.");
+      const base64 = XLSX.write(createReportsWorkbook(state), { bookType: "xlsx", type: "base64" });
+      const uri = `${directory}${reportExportFilename()}`;
+      await FileSystem.writeAsStringAsync(uri, base64, { encoding: FileSystem.EncodingType.Base64 });
+      if (!(await Sharing.isAvailableAsync())) throw new Error("المشاركة غير متاحة على هذا الجهاز.");
+      await Sharing.shareAsync(uri, { mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", dialogTitle: "تصدير تقارير المحاسب الذكي" });
+    } catch (error) { Alert.alert("تعذر التصدير", error instanceof Error ? error.message : "حاول مرة أخرى."); }
+  }
 
   const overview = <View style={styles.section}>
     <MetricRow title="المبيعات المرحّلة" value={amount(reports.sales.total, state.currency)} detail={`${reports.sales.count} فاتورة • صافي ${amount(reports.sales.net, state.currency)}`} icon="trending-up" color="#168A63" soft="#E3F5EE" />
@@ -50,6 +67,7 @@ export default function OperationsReportsScreen() {
       contentContainerStyle={styles.content}
       ListHeaderComponent={<>
         <View style={styles.header}><Pressable accessibilityLabel="رجوع" onPress={() => router.back()} style={styles.back}><MaterialIcons name="arrow-forward" size={22} color="#154C79" /></Pressable><View style={styles.headerCopy}><Text style={styles.eyebrow}>تقارير تشغيلية</Text><Text style={styles.title}>الأعمال والمستندات</Text><Text style={styles.subtitle}>نتائج مشتقة من السجلات المرحّلة والسندات الفعلية فقط.</Text></View></View>
+        <PrimaryButton label="تصدير Excel شامل" icon="file-download" onPress={() => void exportReports()} />
         <FlatList data={tabs} horizontal inverted keyExtractor={(tab) => tab.id} showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabs} renderItem={({ item }) => <Pressable accessibilityRole="button" onPress={() => setActive(item.id)} style={[styles.tab, item.id === active && styles.activeTab]}><MaterialIcons name={item.icon} size={18} color={item.id === active ? "#FFFFFF" : "#65737E"} /><Text style={[styles.tabText, item.id === active && styles.activeTabText]}>{item.label}</Text></Pressable>} />
       </>}
       renderItem={() => <View style={styles.reportBody}>{body}<Text style={styles.disclaimer}>لا تدخل المسودات أو المستندات الملغاة في المبيعات والمشتريات والضريبة. ويعرض التدفق النقدي سندات القبض والصرف المسجلة فقط.</Text></View>}
