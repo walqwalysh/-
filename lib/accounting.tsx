@@ -3,11 +3,14 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 
 import { calculateAccountBalances, calculateBalanceSheet, calculateCategoryTotals, calculateNetIncome, validateJournalLines, type BalanceSheet, type CalculationLine } from "@/lib/accounting-calculations";
 import { defaultAccountNumbering, isCodeInSubrange, nextAccountCode, normaliseAccountNumbering, normaliseSubranges, subrangeForCode, type AccountNumbering, type AccountSubrange, type NewAccountSubrange } from "@/lib/account-numbering";
+import { currencyOptionsForBase, normaliseCurrencyCode, type CurrencyOption } from "./currency-options";
 import { normaliseDateOnly } from "@/lib/date-utils";
 import { formatAmount, formatNumber, numberLocaleCode, setActiveNumberLocale, type NumberLocale } from "./number-formatting";
 
 export { formatAmount, formatNumber, numberLocaleCode } from "./number-formatting";
 export type { NumberLocale } from "./number-formatting";
+export { currencyOptionsForBase, normaliseCurrencyCode } from "./currency-options";
+export type { CurrencyOption } from "./currency-options";
 
 export type AccountCategory = "asset" | "liability" | "equity" | "revenue" | "expense";
 export type AccountNature = "debit" | "credit";
@@ -816,7 +819,10 @@ export function AccountingProvider({ children }: { children: ReactNode }) {
     if (state.accounts.some((account) => account.subrangeId === id)) throw new Error("لا يمكن حذف نطاق مرتبط بحسابات موجودة.");
     await commit({ ...state, subranges: state.subranges.filter((range) => range.id !== id) });
   }, [commit, state]);
-  const updateCurrency = useCallback(async (currency: string) => commit({ ...state, currency: currency.trim() || "د.ل" }), [commit, state]);
+  const updateCurrency = useCallback(async (currency: string) => {
+    const nextCurrency = normaliseCurrencyCode(currency) || "د.ل";
+    await commit({ ...state, currency: nextCurrency });
+  }, [commit, state]);
   const addCurrency = useCallback(async (input: NewCurrency) => {
     const code = input.code.trim().toUpperCase(); const name = input.name.trim();
     if (!/^[A-Z0-9._ -]{1,12}$/.test(code) || !name) throw new Error("أدخل رمز عملة مختصراً واسمها.");

@@ -1,14 +1,15 @@
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Alert, FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { ScreenContainer } from "@/components/screen-container";
 import { EmptyState, PrimaryButton } from "@/components/accounting-ui";
-import { formatAmount, useAccounting } from "@/lib/accounting";
+import { currencyOptionsForBase, formatAmount, useAccounting } from "@/lib/accounting";
 
 export default function AddEntryScreen() {
   const { state, addJournalEntry } = useAccounting();
   const [description, setDescription] = useState(""); const [amount, setAmount] = useState(""); const [debitAccountId, setDebitAccountId] = useState(""); const [creditAccountId, setCreditAccountId] = useState(""); const [documentReference, setDocumentReference] = useState(""); const [entryCurrency, setEntryCurrency] = useState(state.currency); const [fxRate, setFxRate] = useState(""); const [saving, setSaving] = useState(false);
-  const documentCurrencies = useMemo(() => [{ code: state.currency, name: "العملة الأساسية" }, ...state.currencies.filter((currency) => currency.code !== state.currency.toUpperCase())], [state.currencies, state.currency]);
+  const documentCurrencies = useMemo(() => currencyOptionsForBase(state.currency, state.currencies), [state.currencies, state.currency]);
+  useEffect(() => { setEntryCurrency(state.currency); }, [state.currency]);
   const debitAccount = useMemo(() => state.accounts.find((account) => account.id === debitAccountId), [debitAccountId, state.accounts]);
   const creditAccount = useMemo(() => state.accounts.find((account) => account.id === creditAccountId), [creditAccountId, state.accounts]);
   const numericAmount = Number(amount.replace(",", "."));
