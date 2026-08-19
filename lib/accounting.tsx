@@ -4,9 +4,14 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { calculateAccountBalances, calculateBalanceSheet, calculateCategoryTotals, calculateNetIncome, validateJournalLines, type BalanceSheet, type CalculationLine } from "@/lib/accounting-calculations";
 import { defaultAccountNumbering, isCodeInSubrange, nextAccountCode, normaliseAccountNumbering, normaliseSubranges, subrangeForCode, type AccountNumbering, type AccountSubrange, type NewAccountSubrange } from "@/lib/account-numbering";
 import { normaliseDateOnly } from "@/lib/date-utils";
+import { formatAmount, formatNumber, numberLocaleCode, setActiveNumberLocale, type NumberLocale } from "./number-formatting";
+
+export { formatAmount, formatNumber, numberLocaleCode } from "./number-formatting";
+export type { NumberLocale } from "./number-formatting";
 
 export type AccountCategory = "asset" | "liability" | "equity" | "revenue" | "expense";
 export type AccountNature = "debit" | "credit";
+export type CurrencyDefinition = { id: string; code: string; name: string; createdAt: string };
 export type Account = { id: string; code: string; name: string; category: AccountCategory; nature: AccountNature; scope: string; subrangeId?: string; createdAt: string };
 export type JournalLine = CalculationLine & { id: string };
 export type VoucherType = "receipt" | "payment";
@@ -27,7 +32,7 @@ export type CashBankTransactionType = "receipt" | "payment" | "transfer";
 export type CashBankTransaction = { id: string; type: CashBankTransactionType; date: string; amount: number; description: string; cashBankAccountId?: string; counterpartAccountId?: string; fromCashBankAccountId?: string; toCashBankAccountId?: string; journalEntryId: string; createdAt: string };
 export type Budget = { id: string; name: string; startDate: string; endDate: string; notes?: string; createdAt: string };
 export type BudgetLine = { id: string; budgetId: string; accountId: string; plannedAmount: number; createdAt: string };
-export type AuditAction = "account_created" | "journal_posted" | "journal_reversed" | "journal_imported" | "contact_created" | "contact_deleted" | "item_created" | "installment_created" | "voucher_created" | "cash_bank_account_created" | "cash_bank_transaction_posted" | "budget_created" | "budget_line_created" | "cost_center_created" | "cost_center_deleted" | "document_created" | "document_posted" | "inventory_item_created" | "inventory_movement_recorded" | "employee_created" | "payroll_created" | "payroll_posted" | "asset_created" | "depreciation_posted";
+export type AuditAction = "account_created" | "journal_posted" | "journal_reversed" | "journal_imported" | "contact_created" | "contact_deleted" | "item_created" | "installment_created" | "voucher_created" | "cash_bank_account_created" | "cash_bank_transaction_posted" | "budget_created" | "budget_line_created" | "currency_created" | "currency_deleted" | "cost_center_created" | "cost_center_deleted" | "document_created" | "document_posted" | "inventory_item_created" | "inventory_movement_recorded" | "employee_created" | "payroll_created" | "payroll_posted" | "asset_created" | "depreciation_posted";
 export type AuditLog = { id: string; action: AuditAction; description: string; entityId?: string; createdAt: string };
 export type AccountingBackup = { format: "smart-accountant-backup"; version: 1; exportedAt: string; data: AccountingState };
 
@@ -106,19 +111,23 @@ export type AccountingState = {
   budgetLines: BudgetLine[];
   auditLog: AuditLog[];
   currency: string;
+  currencies: CurrencyDefinition[];
+  numberLocale: NumberLocale;
   termsAccepted: boolean;
   numbering: AccountNumbering;
   subranges: AccountSubrange[];
 };
 export type CategorySummary = Record<AccountCategory, number>;
 
-const STORAGE_KEY = "smart-accountant:data:v6";
+const STORAGE_KEY = "smart-accountant:data:v8";
+const PREVIOUS_V7_STORAGE_KEY = "smart-accountant:data:v7";
+const PREVIOUS_V6_STORAGE_KEY = "smart-accountant:data:v6";
 const PREVIOUS_V5_STORAGE_KEY = "smart-accountant:data:v5";
 const PREVIOUS_STORAGE_KEY = "smart-accountant:data:v4";
 const LEGACY_STORAGE_KEY = "smart-accountant:data:v3";
 const OLDEST_STORAGE_KEY = "smart-accountant:data:v2";
 const ANCIENT_STORAGE_KEY = "smart-accountant:data:v1";
-const emptyState: AccountingState = { accounts: [], journalEntries: [], contacts: [], accountingItems: [], installments: [], costCenters: [], vouchers: [], commercialDocuments: [], inventoryItems: [], inventoryMovements: [], employees: [], payrollRuns: [], fixedAssets: [], depreciationRecords: [], cashBankAccounts: [], cashBankTransactions: [], budgets: [], budgetLines: [], auditLog: [], currency: "د.ل", termsAccepted: false, numbering: defaultAccountNumbering(), subranges: [] };
+const emptyState: AccountingState = { accounts: [], journalEntries: [], contacts: [], accountingItems: [], installments: [], costCenters: [], vouchers: [], commercialDocuments: [], inventoryItems: [], inventoryMovements: [], employees: [], payrollRuns: [], fixedAssets: [], depreciationRecords: [], cashBankAccounts: [], cashBankTransactions: [], budgets: [], budgetLines: [], auditLog: [], currency: "د.ل", currencies: [], numberLocale: "arabic", termsAccepted: false, numbering: defaultAccountNumbering(), subranges: [] };
 const createId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const categoryIsValid = (value: unknown): value is AccountCategory => typeof value === "string" && value in categoryMeta;
 const contactTypeIsValid = (value: unknown): value is ContactType => value === "customer" || value === "supplier" || value === "debtor" || value === "creditor";
@@ -146,6 +155,7 @@ export type NewCashBankTransaction = { type: Exclude<CashBankTransactionType, "t
 export type NewCashBankTransfer = { fromCashBankAccountId: string; toCashBankAccountId: string; date: string; amount: number; description: string };
 export type NewBudget = { name: string; startDate: string; endDate: string; notes?: string };
 export type NewBudgetLine = { budgetId: string; accountId: string; plannedAmount: number };
+export type NewCurrency = { code: string; name: string };
 type ImportedJournal = { description: string; date: string; lines: Array<{ accountName: string; accountCode?: string; category: AccountCategory; debit: number; credit: number }> };
 
 type AccountingContextValue = {
@@ -189,6 +199,9 @@ type AccountingContextValue = {
   addSubrange: (input: NewAccountSubrange) => Promise<void>;
   deleteSubrange: (id: string) => Promise<void>;
   updateCurrency: (currency: string) => Promise<void>;
+  addCurrency: (input: NewCurrency) => Promise<CurrencyDefinition>;
+  deleteCurrency: (id: string) => Promise<void>;
+  updateNumberLocale: (numberLocale: NumberLocale) => Promise<void>;
   acceptTerms: () => Promise<void>;
   exportBackup: () => Promise<string>;
   restoreBackup: (raw: string) => Promise<void>;
@@ -250,6 +263,15 @@ function normaliseJournalEntry(value: unknown): JournalEntry | null {
   return { id: entry.id, description: entry.description.trim(), date: journalDate, createdAt: typeof entry.createdAt === "string" ? entry.createdAt : new Date().toISOString(), lines: entry.lines as JournalLine[], source: normaliseJournalEntrySource(entry.source), currency: typeof entry.currency === "string" && entry.currency.trim() ? entry.currency.trim() : undefined, fxRate: Number.isFinite(fxRate) && fxRate > 0 ? fxRate : undefined, documentReference: typeof entry.documentReference === "string" && entry.documentReference.trim() ? entry.documentReference.trim() : undefined, costCenterId: typeof entry.costCenterId === "string" && entry.costCenterId.trim() ? entry.costCenterId : undefined, reversalOfEntryId: typeof entry.reversalOfEntryId === "string" && entry.reversalOfEntryId.trim() ? entry.reversalOfEntryId : undefined };
 }
 
+function normaliseCurrencyDefinition(value: unknown): CurrencyDefinition | null {
+  if (!value || typeof value !== "object") return null;
+  const currency = value as Partial<CurrencyDefinition>;
+  const code = typeof currency.code === "string" ? currency.code.trim().toUpperCase() : "";
+  const name = typeof currency.name === "string" ? currency.name.trim() : "";
+  if (!currency.id || !/^[A-Z0-9._ -]{1,12}$/.test(code) || !name) return null;
+  return { id: currency.id, code, name, createdAt: typeof currency.createdAt === "string" ? currency.createdAt : new Date().toISOString() };
+}
+
 function normaliseCostCenter(value: unknown): CostCenter | null {
   if (!value || typeof value !== "object") return null;
   const center = value as Partial<CostCenter>;
@@ -302,7 +324,7 @@ function normaliseCashBankTransaction(value: unknown, cashBankIds: Set<string>, 
 function normaliseAuditLog(value: unknown): AuditLog | null {
   if (!value || typeof value !== "object") return null;
   const audit = value as Partial<AuditLog>;
-  const actions: AuditAction[] = ["account_created", "journal_posted", "journal_reversed", "journal_imported", "contact_created", "contact_deleted", "item_created", "installment_created", "voucher_created", "cash_bank_account_created", "cash_bank_transaction_posted", "budget_created", "budget_line_created", "cost_center_created", "cost_center_deleted", "document_created", "document_posted", "inventory_item_created", "inventory_movement_recorded", "employee_created", "payroll_created", "payroll_posted", "asset_created", "depreciation_posted"];
+  const actions: AuditAction[] = ["account_created", "journal_posted", "journal_reversed", "journal_imported", "contact_created", "contact_deleted", "item_created", "installment_created", "voucher_created", "cash_bank_account_created", "cash_bank_transaction_posted", "budget_created", "budget_line_created", "currency_created", "currency_deleted", "cost_center_created", "cost_center_deleted", "document_created", "document_posted", "inventory_item_created", "inventory_movement_recorded", "employee_created", "payroll_created", "payroll_posted", "asset_created", "depreciation_posted"];
   if (!audit.id || !actions.includes(audit.action as AuditAction) || typeof audit.description !== "string" || !audit.description.trim()) return null;
   return { id: audit.id, action: audit.action as AuditAction, description: audit.description.trim(), entityId: typeof audit.entityId === "string" ? audit.entityId : undefined, createdAt: typeof audit.createdAt === "string" ? audit.createdAt : new Date().toISOString() };
 }
@@ -400,8 +422,9 @@ function normaliseLoadedData(raw: string | null): AccountingState {
     const budgetIds = new Set(budgets.map((budget) => budget.id));
     const budgetLines = Array.isArray(parsed.budgetLines) ? parsed.budgetLines.map((line) => normaliseBudgetLine(line, budgetIds, accountIds)).filter((line): line is BudgetLine => Boolean(line)) : [];
     const auditLog = Array.isArray(parsed.auditLog) ? parsed.auditLog.map(normaliseAuditLog).filter((audit): audit is AuditLog => Boolean(audit)) : [];
+    const currencies = Array.isArray(parsed.currencies) ? parsed.currencies.map(normaliseCurrencyDefinition).filter((currency): currency is CurrencyDefinition => Boolean(currency)).filter((currency, index, all) => all.findIndex((candidate) => candidate.code === currency.code) === index) : [];
     const subranges = normaliseSubranges(parsed.subranges);
-    return { accounts, journalEntries, contacts, accountingItems, installments, costCenters, vouchers, commercialDocuments, inventoryItems, inventoryMovements, employees, payrollRuns, fixedAssets, depreciationRecords, cashBankAccounts, cashBankTransactions, budgets, budgetLines, auditLog, currency: typeof parsed.currency === "string" && parsed.currency.trim() ? parsed.currency : "د.ل", termsAccepted: parsed.termsAccepted === true, numbering: normaliseAccountNumbering(parsed.numbering), subranges };
+    return { accounts, journalEntries, contacts, accountingItems, installments, costCenters, vouchers, commercialDocuments, inventoryItems, inventoryMovements, employees, payrollRuns, fixedAssets, depreciationRecords, cashBankAccounts, cashBankTransactions, budgets, budgetLines, auditLog, currency: typeof parsed.currency === "string" && parsed.currency.trim() ? parsed.currency : "د.ل", currencies, numberLocale: parsed.numberLocale === "english" ? "english" : "arabic", termsAccepted: parsed.termsAccepted === true, numbering: normaliseAccountNumbering(parsed.numbering), subranges };
   } catch { return emptyState; }
 }
 
@@ -419,11 +442,11 @@ export function AccountingProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let mounted = true;
-    Promise.all([AsyncStorage.getItem(STORAGE_KEY), AsyncStorage.getItem(PREVIOUS_V5_STORAGE_KEY), AsyncStorage.getItem(PREVIOUS_STORAGE_KEY), AsyncStorage.getItem(LEGACY_STORAGE_KEY), AsyncStorage.getItem(OLDEST_STORAGE_KEY), AsyncStorage.getItem(ANCIENT_STORAGE_KEY)]).then(([current, previousV5, previous, legacy, oldest, ancient]) => {
+    Promise.all([AsyncStorage.getItem(STORAGE_KEY), AsyncStorage.getItem(PREVIOUS_V7_STORAGE_KEY), AsyncStorage.getItem(PREVIOUS_V6_STORAGE_KEY), AsyncStorage.getItem(PREVIOUS_V5_STORAGE_KEY), AsyncStorage.getItem(PREVIOUS_STORAGE_KEY), AsyncStorage.getItem(LEGACY_STORAGE_KEY), AsyncStorage.getItem(OLDEST_STORAGE_KEY), AsyncStorage.getItem(ANCIENT_STORAGE_KEY)]).then(([current, previousV7, previousV6, previousV5, previous, legacy, oldest, ancient]) => {
       if (!mounted) return;
-      const loaded = normaliseLoadedData(current ?? previousV5 ?? previous ?? legacy ?? oldest ?? ancient);
+      const loaded = normaliseLoadedData(current ?? previousV7 ?? previousV6 ?? previousV5 ?? previous ?? legacy ?? oldest ?? ancient);
       setState(loaded);
-      if (!current && (previousV5 || previous || legacy || oldest || ancient)) void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(loaded));
+      if (!current && (previousV7 || previousV6 || previousV5 || previous || legacy || oldest || ancient)) void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(loaded));
     }).finally(() => { if (mounted) setIsReady(true); });
     return () => { mounted = false; };
   }, []);
@@ -794,6 +817,21 @@ export function AccountingProvider({ children }: { children: ReactNode }) {
     await commit({ ...state, subranges: state.subranges.filter((range) => range.id !== id) });
   }, [commit, state]);
   const updateCurrency = useCallback(async (currency: string) => commit({ ...state, currency: currency.trim() || "د.ل" }), [commit, state]);
+  const addCurrency = useCallback(async (input: NewCurrency) => {
+    const code = input.code.trim().toUpperCase(); const name = input.name.trim();
+    if (!/^[A-Z0-9._ -]{1,12}$/.test(code) || !name) throw new Error("أدخل رمز عملة مختصراً واسمها.");
+    if (code === state.currency.toUpperCase() || state.currencies.some((currency) => currency.code === code)) throw new Error("هذه العملة موجودة بالفعل ضمن الخيارات.");
+    const currency: CurrencyDefinition = { id: createId("currency"), code, name, createdAt: new Date().toISOString() };
+    await commit({ ...state, currencies: [...state.currencies, currency], auditLog: [newAuditLog("currency_created", `إضافة عملة مستند: ${currency.code}`, currency.id), ...state.auditLog] });
+    return currency;
+  }, [commit, state]);
+  const deleteCurrency = useCallback(async (id: string) => {
+    const currency = state.currencies.find((candidate) => candidate.id === id);
+    if (!currency) return;
+    if (currency.code === state.currency.toUpperCase()) throw new Error("لا يمكن حذف العملة الأساسية. غيّر العملة الأساسية أولاً.");
+    await commit({ ...state, currencies: state.currencies.filter((candidate) => candidate.id !== id), auditLog: [newAuditLog("currency_deleted", `حذف عملة مستند: ${currency.code}`, currency.id), ...state.auditLog] });
+  }, [commit, state]);
+  const updateNumberLocale = useCallback(async (numberLocale: NumberLocale) => commit({ ...state, numberLocale }), [commit, state]);
   const acceptTerms = useCallback(async () => commit({ ...state, termsAccepted: true }), [commit, state]);
   const exportBackup = useCallback(async () => JSON.stringify({ format: "smart-accountant-backup", version: 1, exportedAt: new Date().toISOString(), data: state } satisfies AccountingBackup), [state]);
   const restoreBackup = useCallback(async (raw: string) => {
@@ -805,11 +843,12 @@ export function AccountingProvider({ children }: { children: ReactNode }) {
     const restored = normaliseLoadedData(JSON.stringify(backup.data));
     await commit(restored);
   }, [commit]);
-  const clearAllData = useCallback(async () => commit({ ...emptyState, currency: state.currency, termsAccepted: state.termsAccepted, numbering: state.numbering, subranges: state.subranges }), [commit, state.currency, state.numbering, state.subranges, state.termsAccepted]);
+  const clearAllData = useCallback(async () => commit({ ...emptyState, currency: state.currency, currencies: state.currencies, numberLocale: state.numberLocale, termsAccepted: state.termsAccepted, numbering: state.numbering, subranges: state.subranges }), [commit, state.currencies, state.currency, state.numberLocale, state.numbering, state.subranges, state.termsAccepted]);
   const accountBalances = useMemo(() => calculateAccountBalances(state.accounts, state.journalEntries), [state.accounts, state.journalEntries]);
   const summary = useMemo(() => calculateCategoryTotals(state.accounts, accountBalances), [accountBalances, state.accounts]);
   const balanceSheet = useMemo(() => calculateBalanceSheet(summary), [summary]);
-  const value = useMemo<AccountingContextValue>(() => ({ state, isReady, summary, accountBalances, netIncome: calculateNetIncome(summary), balanceSheet, addAccount, addJournalEntry, importJournalEntries, addContact, deleteContact, addAccountingItem, deleteAccountingItem, addInstallment, updateInstallmentStatus, updateInstallmentSchedule, deleteInstallment, addCostCenter, deleteCostCenter, createVoucher, createCommercialDocument, postCommercialDocument, addInventoryItem, recordInventoryMovement, addEmployee, createPayrollRun, postPayrollRun, addFixedAsset, recordMonthlyDepreciation, addCashBankAccount, createCashBankTransaction, transferCashBankFunds, addBudget, addBudgetLine, reverseJournalEntry, suggestAccountCode, updateAccountNumbering, addSubrange, deleteSubrange, updateCurrency, acceptTerms, exportBackup, restoreBackup, clearAllData }), [acceptTerms, accountBalances, addAccount, addAccountingItem, addBudget, addBudgetLine, addCashBankAccount, addContact, addCostCenter, addEmployee, addFixedAsset, addInstallment, addInventoryItem, addJournalEntry, addSubrange, balanceSheet, clearAllData, createCashBankTransaction, createCommercialDocument, createPayrollRun, createVoucher, deleteAccountingItem, deleteContact, deleteCostCenter, deleteInstallment, deleteSubrange, exportBackup, importJournalEntries, isReady, postCommercialDocument, postPayrollRun, recordInventoryMovement, recordMonthlyDepreciation, restoreBackup, reverseJournalEntry, state, suggestAccountCode, summary, transferCashBankFunds, updateAccountNumbering, updateCurrency, updateInstallmentSchedule, updateInstallmentStatus]);
+  useEffect(() => { setActiveNumberLocale(state.numberLocale); }, [state.numberLocale]);
+  const value = useMemo<AccountingContextValue>(() => ({ state, isReady, summary, accountBalances, netIncome: calculateNetIncome(summary), balanceSheet, addAccount, addJournalEntry, importJournalEntries, addContact, deleteContact, addAccountingItem, deleteAccountingItem, addInstallment, updateInstallmentStatus, updateInstallmentSchedule, deleteInstallment, addCostCenter, deleteCostCenter, createVoucher, createCommercialDocument, postCommercialDocument, addInventoryItem, recordInventoryMovement, addEmployee, createPayrollRun, postPayrollRun, addFixedAsset, recordMonthlyDepreciation, addCashBankAccount, createCashBankTransaction, transferCashBankFunds, addBudget, addBudgetLine, reverseJournalEntry, suggestAccountCode, updateAccountNumbering, addSubrange, deleteSubrange, updateCurrency, addCurrency, deleteCurrency, updateNumberLocale, acceptTerms, exportBackup, restoreBackup, clearAllData }), [acceptTerms, accountBalances, addAccount, addAccountingItem, addBudget, addBudgetLine, addCashBankAccount, addContact, addCostCenter, addCurrency, addEmployee, addFixedAsset, addInstallment, addInventoryItem, addJournalEntry, addSubrange, balanceSheet, clearAllData, createCashBankTransaction, createCommercialDocument, createPayrollRun, createVoucher, deleteAccountingItem, deleteContact, deleteCostCenter, deleteCurrency, deleteInstallment, deleteSubrange, exportBackup, importJournalEntries, isReady, postCommercialDocument, postPayrollRun, recordInventoryMovement, recordMonthlyDepreciation, restoreBackup, reverseJournalEntry, state, suggestAccountCode, summary, transferCashBankFunds, updateAccountNumbering, updateCurrency, updateInstallmentSchedule, updateInstallmentStatus, updateNumberLocale]);
   return <AccountingContext.Provider value={value}>{children}</AccountingContext.Provider>;
 }
 
@@ -819,4 +858,3 @@ export const categoryMeta: Record<AccountCategory, { label: string; description:
   asset: { label: "الأصول", description: "ما تملكه المنشأة", icon: "account-balance-wallet", color: "#168A63", softColor: "#E3F5EE" }, liability: { label: "الخصوم", description: "ما على المنشأة", icon: "credit-card", color: "#B97512", softColor: "#FFF4DD" }, equity: { label: "حقوق الملكية", description: "حقوق المالك", icon: "pie-chart", color: "#7357C8", softColor: "#EEE9FE" }, revenue: { label: "الإيرادات", description: "الدخل المحقق", icon: "trending-up", color: "#247AAE", softColor: "#E4F1F9" }, expense: { label: "المصروفات", description: "التكاليف المدفوعة", icon: "trending-down", color: "#C44747", softColor: "#FCEAEA" },
 };
 export const categories = Object.keys(categoryMeta) as AccountCategory[];
-export const formatAmount = (amount: number, currency: string) => `${new Intl.NumberFormat("ar-LY", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number.isFinite(amount) ? amount : 0)} ${currency}`;

@@ -61,6 +61,14 @@ export function buildReportSheets(state: AccountingState): ReportSheet[] {
     vouchers: state.vouchers,
   });
   const accountById = new Map(accounts.map((account) => [account.id, account]));
+  const currencyRows = journals.map((journal) => [
+    toDateOnly(journal.date),
+    journal.description,
+    journal.documentReference ?? "",
+    journal.currency ?? state.currency,
+    journal.fxRate ?? "",
+    journal.lines.reduce((total, line) => total + line.debit, 0),
+  ]);
 
   const trialRows = trialBalance.lines.map((line) => {
     const account = accountById.get(line.accountId);
@@ -92,6 +100,11 @@ export function buildReportSheets(state: AccountingState): ReportSheet[] {
       name: "دفتر الأستاذ",
       headers: ["كود الحساب", "اسم الحساب", "التاريخ", "البيان", "المرجع", "مدين", "دائن", "رصيد مدين", "رصيد دائن"],
       rows: ledgerRows,
+    },
+    {
+      name: "عملات القيود",
+      headers: ["التاريخ", "البيان", "المرجع", "عملة المستند", "سعر الصرف", "قيمة القيد بدفتر الأستاذ"],
+      rows: currencyRows,
     },
     {
       name: "الميزانية العمومية",
