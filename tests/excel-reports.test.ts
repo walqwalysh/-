@@ -20,6 +20,7 @@ const emptyState: AccountingState = {
   depreciationRecords: [],
   cashBankAccounts: [],
   cashBankTransactions: [],
+  bankReconciliations: [],
   budgets: [],
   budgetLines: [],
   auditLog: [],
@@ -32,13 +33,14 @@ const emptyState: AccountingState = {
 };
 
 describe("Excel report export", () => {
-  it("ينشئ مصنفاً يحوي جميع أوراق التقارير المالية والتشغيلية", () => {
+  it("ينشئ مصنفاً يحوي جميع أوراق التقارير المالية والتشغيلية والمصرفية", () => {
     const workbook = createReportsWorkbook(emptyState);
 
     expect(workbook.SheetNames).toEqual([
       "ميزان المراجعة",
       "دفتر الأستاذ",
       "عملات القيود",
+      "كشف المطابقة المصرفية",
       "الميزانية العمومية",
       "المبيعات",
       "المشتريات",
@@ -57,6 +59,7 @@ describe("Excel report export", () => {
     expect(findSheet("ميزان المراجعة").rows).toEqual([["", "الإجمالي", "", 0, 0]]);
     expect(findSheet("دفتر الأستاذ").rows).toEqual([]);
     expect(findSheet("عملات القيود").rows).toEqual([]);
+    expect(findSheet("كشف المطابقة المصرفية").rows).toEqual([]);
     expect(findSheet("المخزون").rows).toEqual([]);
     expect(findSheet("الأصول الثابتة").rows).toEqual([]);
     expect(findSheet("الميزانية العمومية").rows.map((row) => row[1])).toEqual([0, 0, 0, 0, 0]);

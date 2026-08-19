@@ -8,6 +8,7 @@ import {
   calculateTrialBalance,
 } from "./accounting-calculations";
 import type { AccountingState, AccountCategory } from "./accounting";
+import { formatAccountingDate } from "./date-utils";
 import { calculateOperationalReports } from "./operational-reports";
 
 type CellValue = string | number;
@@ -61,6 +62,24 @@ export function buildReportSheets(state: AccountingState): ReportSheet[] {
     vouchers: state.vouchers,
   });
   const accountById = new Map(accounts.map((account) => [account.id, account]));
+  const journalById = new Map(journals.map((journal) => [journal.id, journal]));
+  const bankAccountById = new Map(state.cashBankAccounts.map((account) => [account.id, account]));
+  const reconciliationStatusLabel = { matched: "مطابق", unmatched: "غير مطابق", excluded: "مستثنى" } as const;
+  const reconciliationRows = state.bankReconciliations.flatMap((reconciliation) => reconciliation.lines.map((line) => {
+    const journal = line.matchedEntryId ? journalById.get(line.matchedEntryId) : undefined;
+    return [
+      bankAccountById.get(reconciliation.bankAccountId)?.name ?? "",
+      `${formatAccountingDate(reconciliation.periodStart)} — ${formatAccountingDate(reconciliation.periodEnd)}`,
+      formatAccountingDate(line.date),
+      line.description,
+      line.reference ?? "",
+      line.amount,
+      reconciliationStatusLabel[line.status],
+      journal?.date ? formatAccountingDate(journal.date) : "",
+      journal?.description ?? "",
+      journal?.documentReference ?? "",
+    ];
+  }));
   const currencyRows = journals.map((journal) => [
     toDateOnly(journal.date),
     journal.description,
@@ -105,6 +124,11 @@ export function buildReportSheets(state: AccountingState): ReportSheet[] {
       name: "عملات القيود",
       headers: ["التاريخ", "البيان", "المرجع", "عملة المستند", "سعر الصرف", "قيمة القيد بدفتر الأستاذ"],
       rows: currencyRows,
+    },
+    {
+      name: "كشف المطابقة المصرفية",
+      headers: ["الحساب البنكي", "فترة الكشف", "التاريخ", "البيان", "مرجع كشف البنك", "المبلغ", "الحالة", "تاريخ القيد", "القيد المرتبط", "مرجع القيد"],
+      rows: reconciliationRows,
     },
     {
       name: "الميزانية العمومية",

@@ -6,6 +6,7 @@ import { defaultAccountNumbering, isCodeInSubrange, nextAccountCode, normaliseAc
 import { currencyOptionsForBase, normaliseCurrencyCode, type CurrencyOption } from "./currency-options";
 import { normaliseDateOnly } from "@/lib/date-utils";
 import { formatAmount, formatNumber, numberLocaleCode, setActiveNumberLocale, type NumberLocale } from "./number-formatting";
+import { normaliseBankReconciliation, type BankReconciliation, type BankStatementLine, type BankStatementLineStatus, type NewBankStatementLine } from "./bank-reconciliation";
 
 export { formatAmount, formatNumber, numberLocaleCode } from "./number-formatting";
 export type { NumberLocale } from "./number-formatting";
@@ -35,7 +36,7 @@ export type CashBankTransactionType = "receipt" | "payment" | "transfer";
 export type CashBankTransaction = { id: string; type: CashBankTransactionType; date: string; amount: number; description: string; cashBankAccountId?: string; counterpartAccountId?: string; fromCashBankAccountId?: string; toCashBankAccountId?: string; journalEntryId: string; createdAt: string };
 export type Budget = { id: string; name: string; startDate: string; endDate: string; notes?: string; createdAt: string };
 export type BudgetLine = { id: string; budgetId: string; accountId: string; plannedAmount: number; createdAt: string };
-export type AuditAction = "account_created" | "journal_posted" | "journal_reversed" | "journal_imported" | "contact_created" | "contact_deleted" | "item_created" | "installment_created" | "voucher_created" | "cash_bank_account_created" | "cash_bank_transaction_posted" | "budget_created" | "budget_line_created" | "currency_created" | "currency_deleted" | "cost_center_created" | "cost_center_deleted" | "document_created" | "document_posted" | "inventory_item_created" | "inventory_movement_recorded" | "employee_created" | "payroll_created" | "payroll_posted" | "asset_created" | "depreciation_posted";
+export type AuditAction = "account_created" | "journal_posted" | "journal_reversed" | "journal_imported" | "contact_created" | "contact_deleted" | "item_created" | "installment_created" | "voucher_created" | "cash_bank_account_created" | "cash_bank_transaction_posted" | "bank_reconciliation_created" | "bank_reconciliation_updated" | "bank_reconciliation_deleted" | "budget_created" | "budget_line_created" | "currency_created" | "currency_deleted" | "cost_center_created" | "cost_center_deleted" | "document_created" | "document_posted" | "inventory_item_created" | "inventory_movement_recorded" | "employee_created" | "payroll_created" | "payroll_posted" | "asset_created" | "depreciation_posted";
 export type AuditLog = { id: string; action: AuditAction; description: string; entityId?: string; createdAt: string };
 export type AccountingBackup = { format: "smart-accountant-backup"; version: 1; exportedAt: string; data: AccountingState };
 
@@ -110,6 +111,7 @@ export type AccountingState = {
   depreciationRecords: DepreciationRecord[];
   cashBankAccounts: CashBankAccount[];
   cashBankTransactions: CashBankTransaction[];
+  bankReconciliations: BankReconciliation[];
   budgets: Budget[];
   budgetLines: BudgetLine[];
   auditLog: AuditLog[];
@@ -122,7 +124,8 @@ export type AccountingState = {
 };
 export type CategorySummary = Record<AccountCategory, number>;
 
-const STORAGE_KEY = "smart-accountant:data:v8";
+const STORAGE_KEY = "smart-accountant:data:v9";
+const PREVIOUS_V8_STORAGE_KEY = "smart-accountant:data:v8";
 const PREVIOUS_V7_STORAGE_KEY = "smart-accountant:data:v7";
 const PREVIOUS_V6_STORAGE_KEY = "smart-accountant:data:v6";
 const PREVIOUS_V5_STORAGE_KEY = "smart-accountant:data:v5";
@@ -130,7 +133,7 @@ const PREVIOUS_STORAGE_KEY = "smart-accountant:data:v4";
 const LEGACY_STORAGE_KEY = "smart-accountant:data:v3";
 const OLDEST_STORAGE_KEY = "smart-accountant:data:v2";
 const ANCIENT_STORAGE_KEY = "smart-accountant:data:v1";
-const emptyState: AccountingState = { accounts: [], journalEntries: [], contacts: [], accountingItems: [], installments: [], costCenters: [], vouchers: [], commercialDocuments: [], inventoryItems: [], inventoryMovements: [], employees: [], payrollRuns: [], fixedAssets: [], depreciationRecords: [], cashBankAccounts: [], cashBankTransactions: [], budgets: [], budgetLines: [], auditLog: [], currency: "د.ل", currencies: [], numberLocale: "arabic", termsAccepted: false, numbering: defaultAccountNumbering(), subranges: [] };
+const emptyState: AccountingState = { accounts: [], journalEntries: [], contacts: [], accountingItems: [], installments: [], costCenters: [], vouchers: [], commercialDocuments: [], inventoryItems: [], inventoryMovements: [], employees: [], payrollRuns: [], fixedAssets: [], depreciationRecords: [], cashBankAccounts: [], cashBankTransactions: [], bankReconciliations: [], budgets: [], budgetLines: [], auditLog: [], currency: "د.ل", currencies: [], numberLocale: "arabic", termsAccepted: false, numbering: defaultAccountNumbering(), subranges: [] };
 const createId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const categoryIsValid = (value: unknown): value is AccountCategory => typeof value === "string" && value in categoryMeta;
 const contactTypeIsValid = (value: unknown): value is ContactType => value === "customer" || value === "supplier" || value === "debtor" || value === "creditor";
@@ -156,6 +159,8 @@ export type NewFixedAsset = { name: string; acquisitionDate: string; cost: numbe
 export type NewCashBankAccount = { name: string; type: CashBankAccountType; accountId: string; bankName?: string; accountNumber?: string; notes?: string };
 export type NewCashBankTransaction = { type: Exclude<CashBankTransactionType, "transfer">; cashBankAccountId: string; counterpartAccountId: string; date: string; amount: number; description: string };
 export type NewCashBankTransfer = { fromCashBankAccountId: string; toCashBankAccountId: string; date: string; amount: number; description: string };
+export type NewBankReconciliation = { bankAccountId: string; periodStart: string; periodEnd: string; openingBalance: number; closingBalance: number };
+export type BankReconciliationLinePatch = Partial<Pick<BankStatementLine, "date" | "description" | "amount" | "reference" | "matchedEntryId" | "status">>;
 export type NewBudget = { name: string; startDate: string; endDate: string; notes?: string };
 export type NewBudgetLine = { budgetId: string; accountId: string; plannedAmount: number };
 export type NewCurrency = { code: string; name: string };
@@ -194,6 +199,11 @@ type AccountingContextValue = {
   addCashBankAccount: (input: NewCashBankAccount) => Promise<CashBankAccount>;
   createCashBankTransaction: (input: NewCashBankTransaction) => Promise<CashBankTransaction>;
   transferCashBankFunds: (input: NewCashBankTransfer) => Promise<CashBankTransaction>;
+  addBankReconciliation: (input: NewBankReconciliation) => Promise<BankReconciliation>;
+  updateBankReconciliation: (id: string, input: NewBankReconciliation) => Promise<BankReconciliation>;
+  addReconciliationLine: (reconciliationId: string, input: NewBankStatementLine) => Promise<BankStatementLine>;
+  updateReconciliationLine: (reconciliationId: string, lineId: string, patch: BankReconciliationLinePatch) => Promise<void>;
+  deleteBankReconciliation: (id: string) => Promise<void>;
   addBudget: (input: NewBudget) => Promise<Budget>;
   addBudgetLine: (input: NewBudgetLine) => Promise<BudgetLine>;
   reverseJournalEntry: (id: string, date?: string) => Promise<void>;
@@ -327,7 +337,7 @@ function normaliseCashBankTransaction(value: unknown, cashBankIds: Set<string>, 
 function normaliseAuditLog(value: unknown): AuditLog | null {
   if (!value || typeof value !== "object") return null;
   const audit = value as Partial<AuditLog>;
-  const actions: AuditAction[] = ["account_created", "journal_posted", "journal_reversed", "journal_imported", "contact_created", "contact_deleted", "item_created", "installment_created", "voucher_created", "cash_bank_account_created", "cash_bank_transaction_posted", "budget_created", "budget_line_created", "currency_created", "currency_deleted", "cost_center_created", "cost_center_deleted", "document_created", "document_posted", "inventory_item_created", "inventory_movement_recorded", "employee_created", "payroll_created", "payroll_posted", "asset_created", "depreciation_posted"];
+  const actions: AuditAction[] = ["account_created", "journal_posted", "journal_reversed", "journal_imported", "contact_created", "contact_deleted", "item_created", "installment_created", "voucher_created", "cash_bank_account_created", "cash_bank_transaction_posted", "bank_reconciliation_created", "bank_reconciliation_updated", "bank_reconciliation_deleted", "budget_created", "budget_line_created", "currency_created", "currency_deleted", "cost_center_created", "cost_center_deleted", "document_created", "document_posted", "inventory_item_created", "inventory_movement_recorded", "employee_created", "payroll_created", "payroll_posted", "asset_created", "depreciation_posted"];
   if (!audit.id || !actions.includes(audit.action as AuditAction) || typeof audit.description !== "string" || !audit.description.trim()) return null;
   return { id: audit.id, action: audit.action as AuditAction, description: audit.description.trim(), entityId: typeof audit.entityId === "string" ? audit.entityId : undefined, createdAt: typeof audit.createdAt === "string" ? audit.createdAt : new Date().toISOString() };
 }
@@ -421,13 +431,15 @@ function normaliseLoadedData(raw: string | null): AccountingState {
     const cashBankAccounts = Array.isArray(parsed.cashBankAccounts) ? parsed.cashBankAccounts.map((account) => normaliseCashBankAccount(account, accountIds)).filter((account): account is CashBankAccount => Boolean(account && accounts.some((linked) => linked.id === account.accountId && linked.category === "asset"))) : [];
     const cashBankIds = new Set(cashBankAccounts.map((account) => account.id));
     const cashBankTransactions = Array.isArray(parsed.cashBankTransactions) ? parsed.cashBankTransactions.map((transaction) => normaliseCashBankTransaction(transaction, cashBankIds, accountIds, journalIds)).filter((transaction): transaction is CashBankTransaction => Boolean(transaction)) : [];
+    const bankAccountIds = new Set(cashBankAccounts.filter((account) => account.type === "bank").map((account) => account.id));
+    const bankReconciliations = Array.isArray(parsed.bankReconciliations) ? parsed.bankReconciliations.map((reconciliation) => normaliseBankReconciliation(reconciliation, bankAccountIds, journalIds)).filter((reconciliation): reconciliation is BankReconciliation => Boolean(reconciliation)) : [];
     const budgets = Array.isArray(parsed.budgets) ? parsed.budgets.map(normaliseBudget).filter((budget): budget is Budget => Boolean(budget)) : [];
     const budgetIds = new Set(budgets.map((budget) => budget.id));
     const budgetLines = Array.isArray(parsed.budgetLines) ? parsed.budgetLines.map((line) => normaliseBudgetLine(line, budgetIds, accountIds)).filter((line): line is BudgetLine => Boolean(line)) : [];
     const auditLog = Array.isArray(parsed.auditLog) ? parsed.auditLog.map(normaliseAuditLog).filter((audit): audit is AuditLog => Boolean(audit)) : [];
     const currencies = Array.isArray(parsed.currencies) ? parsed.currencies.map(normaliseCurrencyDefinition).filter((currency): currency is CurrencyDefinition => Boolean(currency)).filter((currency, index, all) => all.findIndex((candidate) => candidate.code === currency.code) === index) : [];
     const subranges = normaliseSubranges(parsed.subranges);
-    return { accounts, journalEntries, contacts, accountingItems, installments, costCenters, vouchers, commercialDocuments, inventoryItems, inventoryMovements, employees, payrollRuns, fixedAssets, depreciationRecords, cashBankAccounts, cashBankTransactions, budgets, budgetLines, auditLog, currency: typeof parsed.currency === "string" && parsed.currency.trim() ? parsed.currency : "د.ل", currencies, numberLocale: parsed.numberLocale === "english" ? "english" : "arabic", termsAccepted: parsed.termsAccepted === true, numbering: normaliseAccountNumbering(parsed.numbering), subranges };
+    return { accounts, journalEntries, contacts, accountingItems, installments, costCenters, vouchers, commercialDocuments, inventoryItems, inventoryMovements, employees, payrollRuns, fixedAssets, depreciationRecords, cashBankAccounts, cashBankTransactions, bankReconciliations, budgets, budgetLines, auditLog, currency: typeof parsed.currency === "string" && parsed.currency.trim() ? parsed.currency : "د.ل", currencies, numberLocale: parsed.numberLocale === "english" ? "english" : "arabic", termsAccepted: parsed.termsAccepted === true, numbering: normaliseAccountNumbering(parsed.numbering), subranges };
   } catch { return emptyState; }
 }
 
@@ -445,11 +457,11 @@ export function AccountingProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let mounted = true;
-    Promise.all([AsyncStorage.getItem(STORAGE_KEY), AsyncStorage.getItem(PREVIOUS_V7_STORAGE_KEY), AsyncStorage.getItem(PREVIOUS_V6_STORAGE_KEY), AsyncStorage.getItem(PREVIOUS_V5_STORAGE_KEY), AsyncStorage.getItem(PREVIOUS_STORAGE_KEY), AsyncStorage.getItem(LEGACY_STORAGE_KEY), AsyncStorage.getItem(OLDEST_STORAGE_KEY), AsyncStorage.getItem(ANCIENT_STORAGE_KEY)]).then(([current, previousV7, previousV6, previousV5, previous, legacy, oldest, ancient]) => {
+    Promise.all([AsyncStorage.getItem(STORAGE_KEY), AsyncStorage.getItem(PREVIOUS_V8_STORAGE_KEY), AsyncStorage.getItem(PREVIOUS_V7_STORAGE_KEY), AsyncStorage.getItem(PREVIOUS_V6_STORAGE_KEY), AsyncStorage.getItem(PREVIOUS_V5_STORAGE_KEY), AsyncStorage.getItem(PREVIOUS_STORAGE_KEY), AsyncStorage.getItem(LEGACY_STORAGE_KEY), AsyncStorage.getItem(OLDEST_STORAGE_KEY), AsyncStorage.getItem(ANCIENT_STORAGE_KEY)]).then(([current, previousV8, previousV7, previousV6, previousV5, previous, legacy, oldest, ancient]) => {
       if (!mounted) return;
-      const loaded = normaliseLoadedData(current ?? previousV7 ?? previousV6 ?? previousV5 ?? previous ?? legacy ?? oldest ?? ancient);
+      const loaded = normaliseLoadedData(current ?? previousV8 ?? previousV7 ?? previousV6 ?? previousV5 ?? previous ?? legacy ?? oldest ?? ancient);
       setState(loaded);
-      if (!current && (previousV7 || previousV6 || previousV5 || previous || legacy || oldest || ancient)) void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(loaded));
+      if (!current && (previousV8 || previousV7 || previousV6 || previousV5 || previous || legacy || oldest || ancient)) void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(loaded));
     }).finally(() => { if (mounted) setIsReady(true); });
     return () => { mounted = false; };
   }, []);
@@ -776,6 +788,70 @@ export function AccountingProvider({ children }: { children: ReactNode }) {
     return transaction;
   }, [commit, state]);
 
+  const validateReconciliationInput = (input: NewBankReconciliation, excludedId?: string) => {
+    const bankAccount = state.cashBankAccounts.find((account) => account.id === input.bankAccountId && account.type === "bank");
+    const periodStart = normaliseDateOnly(input.periodStart); const periodEnd = normaliseDateOnly(input.periodEnd);
+    const openingBalance = Number(input.openingBalance); const closingBalance = Number(input.closingBalance);
+    if (!bankAccount || !periodStart || !periodEnd || periodEnd < periodStart || !Number.isFinite(openingBalance) || !Number.isFinite(closingBalance)) throw new Error("أكمل حساب البنك وفترة الكشف والأرصدة الافتتاحية والختامية بشكل صحيح.");
+    if (state.bankReconciliations.some((candidate) => candidate.id !== excludedId && candidate.bankAccountId === bankAccount.id && candidate.periodStart <= periodEnd && candidate.periodEnd >= periodStart)) throw new Error("تتداخل فترة الكشف مع مطابقة مصرفية قائمة للحساب نفسه.");
+    return { bankAccount, periodStart, periodEnd, openingBalance: Number(openingBalance.toFixed(2)), closingBalance: Number(closingBalance.toFixed(2)) };
+  };
+
+  const addBankReconciliation = useCallback(async (input: NewBankReconciliation) => {
+    const validated = validateReconciliationInput(input);
+    const now = new Date().toISOString();
+    const reconciliation: BankReconciliation = { id: createId("bank-reconciliation"), bankAccountId: validated.bankAccount.id, periodStart: validated.periodStart, periodEnd: validated.periodEnd, openingBalance: validated.openingBalance, closingBalance: validated.closingBalance, lines: [], createdAt: now, updatedAt: now };
+    await commit({ ...state, bankReconciliations: [reconciliation, ...state.bankReconciliations], auditLog: [newAuditLog("bank_reconciliation_created", `إنشاء كشف مطابقة مصرفية: ${validated.bankAccount.name}`, reconciliation.id), ...state.auditLog] });
+    return reconciliation;
+  }, [commit, state]);
+
+  const updateBankReconciliation = useCallback(async (id: string, input: NewBankReconciliation) => {
+    const current = state.bankReconciliations.find((candidate) => candidate.id === id);
+    if (!current) throw new Error("كشف المطابقة غير موجود.");
+    const validated = validateReconciliationInput(input, id);
+    if (current.lines.some((line) => line.date < validated.periodStart || line.date > validated.periodEnd)) throw new Error("لا يمكن تغيير الفترة قبل تعديل أو حذف السطور الواقعة خارجها.");
+    const reconciliation: BankReconciliation = { ...current, bankAccountId: validated.bankAccount.id, periodStart: validated.periodStart, periodEnd: validated.periodEnd, openingBalance: validated.openingBalance, closingBalance: validated.closingBalance, updatedAt: new Date().toISOString() };
+    await commit({ ...state, bankReconciliations: state.bankReconciliations.map((candidate) => candidate.id === id ? reconciliation : candidate), auditLog: [newAuditLog("bank_reconciliation_updated", `تحديث كشف مطابقة مصرفية: ${validated.bankAccount.name}`, id), ...state.auditLog] });
+    return reconciliation;
+  }, [commit, state]);
+
+  const addReconciliationLine = useCallback(async (reconciliationId: string, input: NewBankStatementLine) => {
+    const reconciliation = state.bankReconciliations.find((candidate) => candidate.id === reconciliationId);
+    const date = normaliseDateOnly(input.date); const description = input.description.trim(); const amount = Number(input.amount);
+    if (!reconciliation || !date || date < reconciliation.periodStart || date > reconciliation.periodEnd || !description || !Number.isFinite(amount) || amount === 0) throw new Error("أدخل سطراً صحيحاً ضمن فترة الكشف وبمبلغ غير صفري.");
+    const line: BankStatementLine = { id: createId("statement-line"), date, description, amount: Number(amount.toFixed(2)), reference: input.reference?.trim() || undefined, status: "unmatched" };
+    const updated = { ...reconciliation, lines: [...reconciliation.lines, line], updatedAt: new Date().toISOString() };
+    await commit({ ...state, bankReconciliations: state.bankReconciliations.map((candidate) => candidate.id === reconciliationId ? updated : candidate), auditLog: [newAuditLog("bank_reconciliation_updated", `إضافة سطر إلى كشف المطابقة المصرفية`, reconciliationId), ...state.auditLog] });
+    return line;
+  }, [commit, state]);
+
+  const updateReconciliationLine = useCallback(async (reconciliationId: string, lineId: string, patch: BankReconciliationLinePatch) => {
+    const reconciliation = state.bankReconciliations.find((candidate) => candidate.id === reconciliationId);
+    const current = reconciliation?.lines.find((line) => line.id === lineId);
+    const bankAccount = reconciliation ? state.cashBankAccounts.find((account) => account.id === reconciliation.bankAccountId && account.type === "bank") : undefined;
+    if (!reconciliation || !current || !bankAccount) throw new Error("سطر كشف البنك أو الحساب المرتبط غير موجود.");
+    const date = patch.date === undefined ? current.date : normaliseDateOnly(patch.date);
+    const description = patch.description === undefined ? current.description : patch.description.trim();
+    const amount = patch.amount === undefined ? current.amount : Number(patch.amount);
+    const requestedStatus: BankStatementLineStatus = patch.status ?? (patch.matchedEntryId ? "matched" : current.status);
+    const matchedEntryId = patch.matchedEntryId === undefined ? current.matchedEntryId : patch.matchedEntryId || undefined;
+    if (!date || date < reconciliation.periodStart || date > reconciliation.periodEnd || !description || !Number.isFinite(amount) || amount === 0 || (requestedStatus !== "matched" && requestedStatus !== "unmatched" && requestedStatus !== "excluded")) throw new Error("تحقق من تاريخ السطر ووصفه ومبلغه وحالته.");
+    if (requestedStatus === "matched") {
+      const entry = matchedEntryId ? state.journalEntries.find((candidate) => candidate.id === matchedEntryId) : undefined;
+      if (!entry || !entry.lines.some((line) => line.accountId === bankAccount.accountId)) throw new Error("اختر قيداً فعلياً مرتبطاً بالحساب البنكي للمطابقة.");
+      if (state.bankReconciliations.some((candidate) => candidate.lines.some((line) => line.id !== lineId && line.status === "matched" && line.matchedEntryId === entry.id))) throw new Error("هذا القيد مطابق بالفعل مع سطر كشف آخر.");
+    }
+    const line: BankStatementLine = { id: current.id, date, description, amount: Number(amount.toFixed(2)), reference: patch.reference === undefined ? current.reference : patch.reference.trim() || undefined, status: requestedStatus, matchedEntryId: requestedStatus === "matched" ? matchedEntryId : undefined };
+    const updated = { ...reconciliation, lines: reconciliation.lines.map((candidate) => candidate.id === lineId ? line : candidate), updatedAt: new Date().toISOString() };
+    await commit({ ...state, bankReconciliations: state.bankReconciliations.map((candidate) => candidate.id === reconciliationId ? updated : candidate), auditLog: [newAuditLog("bank_reconciliation_updated", `تحديث سطر مطابقة مصرفية`, reconciliationId), ...state.auditLog] });
+  }, [commit, state]);
+
+  const deleteBankReconciliation = useCallback(async (id: string) => {
+    const reconciliation = state.bankReconciliations.find((candidate) => candidate.id === id);
+    if (!reconciliation) return;
+    await commit({ ...state, bankReconciliations: state.bankReconciliations.filter((candidate) => candidate.id !== id), auditLog: [newAuditLog("bank_reconciliation_deleted", "حذف كشف مطابقة مصرفية دون تعديل القيود.", id), ...state.auditLog] });
+  }, [commit, state]);
+
   const addBudget = useCallback(async (input: NewBudget) => {
     const name = input.name.trim(); const startDate = normaliseDateOnly(input.startDate); const endDate = normaliseDateOnly(input.endDate);
     if (!name || !startDate || !endDate || endDate < startDate) throw new Error("أدخل اسم الميزانية وفترتها بشكل صحيح.");
@@ -854,7 +930,7 @@ export function AccountingProvider({ children }: { children: ReactNode }) {
   const summary = useMemo(() => calculateCategoryTotals(state.accounts, accountBalances), [accountBalances, state.accounts]);
   const balanceSheet = useMemo(() => calculateBalanceSheet(summary), [summary]);
   useEffect(() => { setActiveNumberLocale(state.numberLocale); }, [state.numberLocale]);
-  const value = useMemo<AccountingContextValue>(() => ({ state, isReady, summary, accountBalances, netIncome: calculateNetIncome(summary), balanceSheet, addAccount, addJournalEntry, importJournalEntries, addContact, deleteContact, addAccountingItem, deleteAccountingItem, addInstallment, updateInstallmentStatus, updateInstallmentSchedule, deleteInstallment, addCostCenter, deleteCostCenter, createVoucher, createCommercialDocument, postCommercialDocument, addInventoryItem, recordInventoryMovement, addEmployee, createPayrollRun, postPayrollRun, addFixedAsset, recordMonthlyDepreciation, addCashBankAccount, createCashBankTransaction, transferCashBankFunds, addBudget, addBudgetLine, reverseJournalEntry, suggestAccountCode, updateAccountNumbering, addSubrange, deleteSubrange, updateCurrency, addCurrency, deleteCurrency, updateNumberLocale, acceptTerms, exportBackup, restoreBackup, clearAllData }), [acceptTerms, accountBalances, addAccount, addAccountingItem, addBudget, addBudgetLine, addCashBankAccount, addContact, addCostCenter, addCurrency, addEmployee, addFixedAsset, addInstallment, addInventoryItem, addJournalEntry, addSubrange, balanceSheet, clearAllData, createCashBankTransaction, createCommercialDocument, createPayrollRun, createVoucher, deleteAccountingItem, deleteContact, deleteCostCenter, deleteCurrency, deleteInstallment, deleteSubrange, exportBackup, importJournalEntries, isReady, postCommercialDocument, postPayrollRun, recordInventoryMovement, recordMonthlyDepreciation, restoreBackup, reverseJournalEntry, state, suggestAccountCode, summary, transferCashBankFunds, updateAccountNumbering, updateCurrency, updateInstallmentSchedule, updateInstallmentStatus, updateNumberLocale]);
+  const value = useMemo<AccountingContextValue>(() => ({ state, isReady, summary, accountBalances, netIncome: calculateNetIncome(summary), balanceSheet, addAccount, addJournalEntry, importJournalEntries, addContact, deleteContact, addAccountingItem, deleteAccountingItem, addInstallment, updateInstallmentStatus, updateInstallmentSchedule, deleteInstallment, addCostCenter, deleteCostCenter, createVoucher, createCommercialDocument, postCommercialDocument, addInventoryItem, recordInventoryMovement, addEmployee, createPayrollRun, postPayrollRun, addFixedAsset, recordMonthlyDepreciation, addCashBankAccount, createCashBankTransaction, transferCashBankFunds, addBankReconciliation, updateBankReconciliation, addReconciliationLine, updateReconciliationLine, deleteBankReconciliation, addBudget, addBudgetLine, reverseJournalEntry, suggestAccountCode, updateAccountNumbering, addSubrange, deleteSubrange, updateCurrency, addCurrency, deleteCurrency, updateNumberLocale, acceptTerms, exportBackup, restoreBackup, clearAllData }), [acceptTerms, accountBalances, addAccount, addAccountingItem, addBankReconciliation, addBudget, addBudgetLine, addCashBankAccount, addContact, addCostCenter, addCurrency, addEmployee, addFixedAsset, addInstallment, addInventoryItem, addJournalEntry, addReconciliationLine, addSubrange, balanceSheet, clearAllData, createCashBankTransaction, createCommercialDocument, createPayrollRun, createVoucher, deleteAccountingItem, deleteBankReconciliation, deleteContact, deleteCostCenter, deleteCurrency, deleteInstallment, deleteSubrange, exportBackup, importJournalEntries, isReady, postCommercialDocument, postPayrollRun, recordInventoryMovement, recordMonthlyDepreciation, restoreBackup, reverseJournalEntry, state, suggestAccountCode, summary, transferCashBankFunds, updateAccountNumbering, updateBankReconciliation, updateCurrency, updateInstallmentSchedule, updateInstallmentStatus, updateNumberLocale, updateReconciliationLine]);
   return <AccountingContext.Provider value={value}>{children}</AccountingContext.Provider>;
 }
 

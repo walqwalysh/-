@@ -106,6 +106,7 @@ export default function RootLayout() {
             <Stack.Screen name="operations-reports" />
             <Stack.Screen name="ledger" />
             <Stack.Screen name="financial-management" />
+            <Stack.Screen name="bank-reconciliation" />
             <Stack.Screen name="oauth/callback" />
           </Stack>
           <StatusBar style="dark" />

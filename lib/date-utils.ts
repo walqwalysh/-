@@ -12,3 +12,17 @@ export function normaliseDateOnly(value: unknown): string | null {
   if (candidate.getUTCFullYear() !== year || candidate.getUTCMonth() !== month - 1 || candidate.getUTCDate() !== day) return null;
   return `${yearText}-${monthText}-${dayText}`;
 }
+
+/** يعرض تاريخ الإدخال المحاسبي بصيغة عربية واضحة مع تجنب تحوّل المنطقة الزمنية. */
+export function formatAccountingDate(value: unknown, locale = "ar-LY"): string {
+  const dateOnly = normaliseDateOnly(value);
+  if (!dateOnly) return "—";
+  const [year, month, day] = dateOnly.split("-").map(Number);
+  return new Intl.DateTimeFormat(locale, {
+    calendar: "gregory",
+    day: "numeric",
+    month: "long",
+    timeZone: "UTC",
+    year: "numeric",
+  }).format(new Date(Date.UTC(year, month - 1, day)));
+}
