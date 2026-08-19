@@ -21,7 +21,13 @@ export type JournalEntrySource =
 export type JournalEntry = { id: string; description: string; date: string; createdAt: string; lines: JournalLine[]; source?: JournalEntrySource; currency?: string; fxRate?: number; documentReference?: string; costCenterId?: string; reversalOfEntryId?: string };
 export type CostCenter = { id: string; name: string; notes?: string; createdAt: string };
 export type Voucher = { id: string; voucherNumber: string; type: VoucherType; paymentMethod: PaymentMethod; partyName: string; amount: number; date: string; description: string; cashAccountId: string; counterpartAccountId: string; journalEntryId: string; createdAt: string };
-export type AuditAction = "account_created" | "journal_posted" | "journal_reversed" | "journal_imported" | "contact_created" | "contact_deleted" | "item_created" | "installment_created" | "voucher_created" | "cost_center_created" | "cost_center_deleted" | "document_created" | "document_posted" | "inventory_item_created" | "inventory_movement_recorded" | "employee_created" | "payroll_created" | "payroll_posted" | "asset_created" | "depreciation_posted";
+export type CashBankAccountType = "cash" | "bank";
+export type CashBankAccount = { id: string; name: string; type: CashBankAccountType; accountId: string; bankName?: string; accountNumber?: string; notes?: string; createdAt: string };
+export type CashBankTransactionType = "receipt" | "payment" | "transfer";
+export type CashBankTransaction = { id: string; type: CashBankTransactionType; date: string; amount: number; description: string; cashBankAccountId?: string; counterpartAccountId?: string; fromCashBankAccountId?: string; toCashBankAccountId?: string; journalEntryId: string; createdAt: string };
+export type Budget = { id: string; name: string; startDate: string; endDate: string; notes?: string; createdAt: string };
+export type BudgetLine = { id: string; budgetId: string; accountId: string; plannedAmount: number; createdAt: string };
+export type AuditAction = "account_created" | "journal_posted" | "journal_reversed" | "journal_imported" | "contact_created" | "contact_deleted" | "item_created" | "installment_created" | "voucher_created" | "cash_bank_account_created" | "cash_bank_transaction_posted" | "budget_created" | "budget_line_created" | "cost_center_created" | "cost_center_deleted" | "document_created" | "document_posted" | "inventory_item_created" | "inventory_movement_recorded" | "employee_created" | "payroll_created" | "payroll_posted" | "asset_created" | "depreciation_posted";
 export type AuditLog = { id: string; action: AuditAction; description: string; entityId?: string; createdAt: string };
 export type AccountingBackup = { format: "smart-accountant-backup"; version: 1; exportedAt: string; data: AccountingState };
 
@@ -94,6 +100,10 @@ export type AccountingState = {
   payrollRuns: PayrollRun[];
   fixedAssets: FixedAsset[];
   depreciationRecords: DepreciationRecord[];
+  cashBankAccounts: CashBankAccount[];
+  cashBankTransactions: CashBankTransaction[];
+  budgets: Budget[];
+  budgetLines: BudgetLine[];
   auditLog: AuditLog[];
   currency: string;
   termsAccepted: boolean;
@@ -102,12 +112,13 @@ export type AccountingState = {
 };
 export type CategorySummary = Record<AccountCategory, number>;
 
-const STORAGE_KEY = "smart-accountant:data:v5";
+const STORAGE_KEY = "smart-accountant:data:v6";
+const PREVIOUS_V5_STORAGE_KEY = "smart-accountant:data:v5";
 const PREVIOUS_STORAGE_KEY = "smart-accountant:data:v4";
 const LEGACY_STORAGE_KEY = "smart-accountant:data:v3";
 const OLDEST_STORAGE_KEY = "smart-accountant:data:v2";
 const ANCIENT_STORAGE_KEY = "smart-accountant:data:v1";
-const emptyState: AccountingState = { accounts: [], journalEntries: [], contacts: [], accountingItems: [], installments: [], costCenters: [], vouchers: [], commercialDocuments: [], inventoryItems: [], inventoryMovements: [], employees: [], payrollRuns: [], fixedAssets: [], depreciationRecords: [], auditLog: [], currency: "د.ل", termsAccepted: false, numbering: defaultAccountNumbering(), subranges: [] };
+const emptyState: AccountingState = { accounts: [], journalEntries: [], contacts: [], accountingItems: [], installments: [], costCenters: [], vouchers: [], commercialDocuments: [], inventoryItems: [], inventoryMovements: [], employees: [], payrollRuns: [], fixedAssets: [], depreciationRecords: [], cashBankAccounts: [], cashBankTransactions: [], budgets: [], budgetLines: [], auditLog: [], currency: "د.ل", termsAccepted: false, numbering: defaultAccountNumbering(), subranges: [] };
 const createId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const categoryIsValid = (value: unknown): value is AccountCategory => typeof value === "string" && value in categoryMeta;
 const contactTypeIsValid = (value: unknown): value is ContactType => value === "customer" || value === "supplier" || value === "debtor" || value === "creditor";
@@ -130,6 +141,11 @@ export type NewInventoryMovement = { inventoryItemId: string; type: InventoryMov
 export type NewEmployee = { name: string; phone?: string; basicSalary?: number; notes?: string };
 export type NewPayrollRun = { employeeId: string; date: string; basicSalary: number; allowances?: number; deductions?: number; expenseAccountId: string; paymentAccountId: string; deductionsAccountId?: string };
 export type NewFixedAsset = { name: string; acquisitionDate: string; cost: number; salvageValue?: number; usefulLifeMonths: number; assetAccountId: string; depreciationExpenseAccountId: string; accumulatedDepreciationAccountId: string };
+export type NewCashBankAccount = { name: string; type: CashBankAccountType; accountId: string; bankName?: string; accountNumber?: string; notes?: string };
+export type NewCashBankTransaction = { type: Exclude<CashBankTransactionType, "transfer">; cashBankAccountId: string; counterpartAccountId: string; date: string; amount: number; description: string };
+export type NewCashBankTransfer = { fromCashBankAccountId: string; toCashBankAccountId: string; date: string; amount: number; description: string };
+export type NewBudget = { name: string; startDate: string; endDate: string; notes?: string };
+export type NewBudgetLine = { budgetId: string; accountId: string; plannedAmount: number };
 type ImportedJournal = { description: string; date: string; lines: Array<{ accountName: string; accountCode?: string; category: AccountCategory; debit: number; credit: number }> };
 
 type AccountingContextValue = {
@@ -162,6 +178,11 @@ type AccountingContextValue = {
   postPayrollRun: (id: string) => Promise<void>;
   addFixedAsset: (input: NewFixedAsset) => Promise<FixedAsset>;
   recordMonthlyDepreciation: (assetId: string, date: string) => Promise<DepreciationRecord>;
+  addCashBankAccount: (input: NewCashBankAccount) => Promise<CashBankAccount>;
+  createCashBankTransaction: (input: NewCashBankTransaction) => Promise<CashBankTransaction>;
+  transferCashBankFunds: (input: NewCashBankTransfer) => Promise<CashBankTransaction>;
+  addBudget: (input: NewBudget) => Promise<Budget>;
+  addBudgetLine: (input: NewBudgetLine) => Promise<BudgetLine>;
   reverseJournalEntry: (id: string, date?: string) => Promise<void>;
   suggestAccountCode: (category: AccountCategory, subrangeId?: string) => string;
   updateAccountNumbering: (numbering: AccountNumbering) => Promise<void>;
@@ -245,10 +266,43 @@ function normaliseVoucher(value: unknown): Voucher | null {
   return { id: voucher.id, voucherNumber: voucher.voucherNumber, type: voucher.type, paymentMethod: voucher.paymentMethod === "cash" || voucher.paymentMethod === "cheque" || voucher.paymentMethod === "bank_transfer" || voucher.paymentMethod === "other" ? voucher.paymentMethod : "cash", partyName: voucher.partyName.trim(), amount: Number(amount.toFixed(2)), date: voucherDate, description: voucher.description.trim(), cashAccountId: voucher.cashAccountId, counterpartAccountId: voucher.counterpartAccountId, journalEntryId: voucher.journalEntryId, createdAt: typeof voucher.createdAt === "string" ? voucher.createdAt : new Date().toISOString() };
 }
 
+function normaliseCashBankAccount(value: unknown, accountIds: Set<string>): CashBankAccount | null {
+  if (!value || typeof value !== "object") return null;
+  const account = value as Partial<CashBankAccount>;
+  if (!account.id || typeof account.name !== "string" || !account.name.trim() || (account.type !== "cash" && account.type !== "bank") || !account.accountId || !accountIds.has(account.accountId)) return null;
+  return { id: account.id, name: account.name.trim(), type: account.type, accountId: account.accountId, bankName: typeof account.bankName === "string" && account.bankName.trim() ? account.bankName.trim() : undefined, accountNumber: typeof account.accountNumber === "string" && account.accountNumber.trim() ? account.accountNumber.trim() : undefined, notes: typeof account.notes === "string" && account.notes.trim() ? account.notes.trim() : undefined, createdAt: typeof account.createdAt === "string" ? account.createdAt : new Date().toISOString() };
+}
+
+function normaliseBudget(value: unknown): Budget | null {
+  if (!value || typeof value !== "object") return null;
+  const budget = value as Partial<Budget>; const startDate = normaliseDateOnly(budget.startDate); const endDate = normaliseDateOnly(budget.endDate);
+  if (!budget.id || typeof budget.name !== "string" || !budget.name.trim() || !startDate || !endDate || endDate < startDate) return null;
+  return { id: budget.id, name: budget.name.trim(), startDate, endDate, notes: typeof budget.notes === "string" && budget.notes.trim() ? budget.notes.trim() : undefined, createdAt: typeof budget.createdAt === "string" ? budget.createdAt : new Date().toISOString() };
+}
+
+function normaliseBudgetLine(value: unknown, budgetIds: Set<string>, accountIds: Set<string>): BudgetLine | null {
+  if (!value || typeof value !== "object") return null;
+  const line = value as Partial<BudgetLine>; const plannedAmount = Number(line.plannedAmount);
+  if (!line.id || !line.budgetId || !budgetIds.has(line.budgetId) || !line.accountId || !accountIds.has(line.accountId) || !Number.isFinite(plannedAmount) || plannedAmount <= 0) return null;
+  return { id: line.id, budgetId: line.budgetId, accountId: line.accountId, plannedAmount: Number(plannedAmount.toFixed(2)), createdAt: typeof line.createdAt === "string" ? line.createdAt : new Date().toISOString() };
+}
+
+function normaliseCashBankTransaction(value: unknown, cashBankIds: Set<string>, accountIds: Set<string>, journalIds: Set<string>): CashBankTransaction | null {
+  if (!value || typeof value !== "object") return null;
+  const transaction = value as Partial<CashBankTransaction>; const amount = Number(transaction.amount); const date = normaliseDateOnly(transaction.date);
+  const isReceiptOrPayment = transaction.type === "receipt" || transaction.type === "payment";
+  const isTransfer = transaction.type === "transfer";
+  if (!transaction.id || !date || !Number.isFinite(amount) || amount <= 0 || typeof transaction.description !== "string" || !transaction.description.trim() || !transaction.journalEntryId || !journalIds.has(transaction.journalEntryId)) return null;
+  if (isReceiptOrPayment && (!transaction.cashBankAccountId || !cashBankIds.has(transaction.cashBankAccountId) || !transaction.counterpartAccountId || !accountIds.has(transaction.counterpartAccountId))) return null;
+  if (isTransfer && (!transaction.fromCashBankAccountId || !cashBankIds.has(transaction.fromCashBankAccountId) || !transaction.toCashBankAccountId || !cashBankIds.has(transaction.toCashBankAccountId) || transaction.fromCashBankAccountId === transaction.toCashBankAccountId)) return null;
+  if (!isReceiptOrPayment && !isTransfer) return null;
+  return { id: transaction.id, type: transaction.type as CashBankTransactionType, date, amount: Number(amount.toFixed(2)), description: transaction.description.trim(), cashBankAccountId: isReceiptOrPayment ? transaction.cashBankAccountId : undefined, counterpartAccountId: isReceiptOrPayment ? transaction.counterpartAccountId : undefined, fromCashBankAccountId: isTransfer ? transaction.fromCashBankAccountId : undefined, toCashBankAccountId: isTransfer ? transaction.toCashBankAccountId : undefined, journalEntryId: transaction.journalEntryId, createdAt: typeof transaction.createdAt === "string" ? transaction.createdAt : new Date().toISOString() };
+}
+
 function normaliseAuditLog(value: unknown): AuditLog | null {
   if (!value || typeof value !== "object") return null;
   const audit = value as Partial<AuditLog>;
-  const actions: AuditAction[] = ["account_created", "journal_posted", "journal_reversed", "journal_imported", "contact_created", "contact_deleted", "item_created", "installment_created", "voucher_created", "cost_center_created", "cost_center_deleted", "document_created", "document_posted", "inventory_item_created", "inventory_movement_recorded", "employee_created", "payroll_created", "payroll_posted", "asset_created", "depreciation_posted"];
+  const actions: AuditAction[] = ["account_created", "journal_posted", "journal_reversed", "journal_imported", "contact_created", "contact_deleted", "item_created", "installment_created", "voucher_created", "cash_bank_account_created", "cash_bank_transaction_posted", "budget_created", "budget_line_created", "cost_center_created", "cost_center_deleted", "document_created", "document_posted", "inventory_item_created", "inventory_movement_recorded", "employee_created", "payroll_created", "payroll_posted", "asset_created", "depreciation_posted"];
   if (!audit.id || !actions.includes(audit.action as AuditAction) || typeof audit.description !== "string" || !audit.description.trim()) return null;
   return { id: audit.id, action: audit.action as AuditAction, description: audit.description.trim(), entityId: typeof audit.entityId === "string" ? audit.entityId : undefined, createdAt: typeof audit.createdAt === "string" ? audit.createdAt : new Date().toISOString() };
 }
@@ -321,6 +375,7 @@ function normaliseLoadedData(raw: string | null): AccountingState {
   try {
     const parsed = JSON.parse(raw) as Partial<AccountingState>;
     const accounts = Array.isArray(parsed.accounts) ? parsed.accounts.map(normaliseAccount).filter((account): account is Account => Boolean(account)) : [];
+    const accountIds = new Set(accounts.map((account) => account.id));
     const journalEntries = Array.isArray(parsed.journalEntries) ? parsed.journalEntries.map(normaliseJournalEntry).filter((entry): entry is JournalEntry => Boolean(entry)) : [];
     const contacts = Array.isArray(parsed.contacts) ? parsed.contacts.map(normaliseContact).filter((contact): contact is Contact => Boolean(contact)) : [];
     const accountingItems = Array.isArray(parsed.accountingItems) ? parsed.accountingItems.map(normaliseAccountingItem).filter((item): item is AccountingItem => Boolean(item)) : [];
@@ -338,9 +393,15 @@ function normaliseLoadedData(raw: string | null): AccountingState {
     const fixedAssets = Array.isArray(parsed.fixedAssets) ? parsed.fixedAssets.map(normaliseFixedAsset).filter((asset): asset is FixedAsset => Boolean(asset)) : [];
     const assetIds = new Set(fixedAssets.map((asset) => asset.id)); const journalIds = new Set(journalEntries.map((entry) => entry.id));
     const depreciationRecords = Array.isArray(parsed.depreciationRecords) ? parsed.depreciationRecords.map((record) => normaliseDepreciationRecord(record, assetIds, journalIds)).filter((record): record is DepreciationRecord => Boolean(record)) : [];
+    const cashBankAccounts = Array.isArray(parsed.cashBankAccounts) ? parsed.cashBankAccounts.map((account) => normaliseCashBankAccount(account, accountIds)).filter((account): account is CashBankAccount => Boolean(account && accounts.some((linked) => linked.id === account.accountId && linked.category === "asset"))) : [];
+    const cashBankIds = new Set(cashBankAccounts.map((account) => account.id));
+    const cashBankTransactions = Array.isArray(parsed.cashBankTransactions) ? parsed.cashBankTransactions.map((transaction) => normaliseCashBankTransaction(transaction, cashBankIds, accountIds, journalIds)).filter((transaction): transaction is CashBankTransaction => Boolean(transaction)) : [];
+    const budgets = Array.isArray(parsed.budgets) ? parsed.budgets.map(normaliseBudget).filter((budget): budget is Budget => Boolean(budget)) : [];
+    const budgetIds = new Set(budgets.map((budget) => budget.id));
+    const budgetLines = Array.isArray(parsed.budgetLines) ? parsed.budgetLines.map((line) => normaliseBudgetLine(line, budgetIds, accountIds)).filter((line): line is BudgetLine => Boolean(line)) : [];
     const auditLog = Array.isArray(parsed.auditLog) ? parsed.auditLog.map(normaliseAuditLog).filter((audit): audit is AuditLog => Boolean(audit)) : [];
     const subranges = normaliseSubranges(parsed.subranges);
-    return { accounts, journalEntries, contacts, accountingItems, installments, costCenters, vouchers, commercialDocuments, inventoryItems, inventoryMovements, employees, payrollRuns, fixedAssets, depreciationRecords, auditLog, currency: typeof parsed.currency === "string" && parsed.currency.trim() ? parsed.currency : "د.ل", termsAccepted: parsed.termsAccepted === true, numbering: normaliseAccountNumbering(parsed.numbering), subranges };
+    return { accounts, journalEntries, contacts, accountingItems, installments, costCenters, vouchers, commercialDocuments, inventoryItems, inventoryMovements, employees, payrollRuns, fixedAssets, depreciationRecords, cashBankAccounts, cashBankTransactions, budgets, budgetLines, auditLog, currency: typeof parsed.currency === "string" && parsed.currency.trim() ? parsed.currency : "د.ل", termsAccepted: parsed.termsAccepted === true, numbering: normaliseAccountNumbering(parsed.numbering), subranges };
   } catch { return emptyState; }
 }
 
@@ -358,11 +419,11 @@ export function AccountingProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let mounted = true;
-    Promise.all([AsyncStorage.getItem(STORAGE_KEY), AsyncStorage.getItem(PREVIOUS_STORAGE_KEY), AsyncStorage.getItem(LEGACY_STORAGE_KEY), AsyncStorage.getItem(OLDEST_STORAGE_KEY), AsyncStorage.getItem(ANCIENT_STORAGE_KEY)]).then(([current, previous, legacy, oldest, ancient]) => {
+    Promise.all([AsyncStorage.getItem(STORAGE_KEY), AsyncStorage.getItem(PREVIOUS_V5_STORAGE_KEY), AsyncStorage.getItem(PREVIOUS_STORAGE_KEY), AsyncStorage.getItem(LEGACY_STORAGE_KEY), AsyncStorage.getItem(OLDEST_STORAGE_KEY), AsyncStorage.getItem(ANCIENT_STORAGE_KEY)]).then(([current, previousV5, previous, legacy, oldest, ancient]) => {
       if (!mounted) return;
-      const loaded = normaliseLoadedData(current ?? previous ?? legacy ?? oldest ?? ancient);
+      const loaded = normaliseLoadedData(current ?? previousV5 ?? previous ?? legacy ?? oldest ?? ancient);
       setState(loaded);
-      if (!current && (previous || legacy || oldest || ancient)) void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(loaded));
+      if (!current && (previousV5 || previous || legacy || oldest || ancient)) void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(loaded));
     }).finally(() => { if (mounted) setIsReady(true); });
     return () => { mounted = false; };
   }, []);
@@ -652,6 +713,61 @@ export function AccountingProvider({ children }: { children: ReactNode }) {
     return record;
   }, [commit, state]);
 
+  const addCashBankAccount = useCallback(async (input: NewCashBankAccount) => {
+    const name = input.name.trim(); const linkedAccount = state.accounts.find((account) => account.id === input.accountId);
+    if (!name || !linkedAccount || linkedAccount.category !== "asset") throw new Error("أدخل اسماً واربطه بحساب أصل موجود.");
+    if (input.type !== "cash" && input.type !== "bank") throw new Error("اختر نوع الحساب: صندوق أو بنك.");
+    if (state.cashBankAccounts.some((account) => account.accountId === linkedAccount.id)) throw new Error("الحساب المحاسبي مرتبط مسبقاً بصندوق أو بنك.");
+    if (state.cashBankAccounts.some((account) => account.name.toLocaleLowerCase() === name.toLocaleLowerCase())) throw new Error("يوجد صندوق أو بنك بالاسم نفسه.");
+    const cashBankAccount: CashBankAccount = { id: createId("cash-bank"), name, type: input.type, accountId: linkedAccount.id, bankName: input.type === "bank" && input.bankName?.trim() ? input.bankName.trim() : undefined, accountNumber: input.type === "bank" && input.accountNumber?.trim() ? input.accountNumber.trim() : undefined, notes: input.notes?.trim() || undefined, createdAt: new Date().toISOString() };
+    await commit({ ...state, cashBankAccounts: [cashBankAccount, ...state.cashBankAccounts], auditLog: [newAuditLog("cash_bank_account_created", `إضافة ${cashBankAccount.type === "cash" ? "صندوق" : "حساب بنكي"}: ${cashBankAccount.name}`, cashBankAccount.id), ...state.auditLog] });
+    return cashBankAccount;
+  }, [commit, state]);
+
+  const createCashBankTransaction = useCallback(async (input: NewCashBankTransaction) => {
+    const amount = Number(input.amount); const date = normaliseDateOnly(input.date); const description = input.description.trim();
+    const cashBank = state.cashBankAccounts.find((account) => account.id === input.cashBankAccountId); const counterpart = state.accounts.find((account) => account.id === input.counterpartAccountId); const cashAccount = cashBank ? state.accounts.find((account) => account.id === cashBank.accountId) : undefined;
+    if (!cashBank || !cashAccount || !counterpart || cashAccount.id === counterpart.id || !date || !description || !Number.isFinite(amount) || amount <= 0) throw new Error("أكمل بيانات الحركة واختر حسابين مختلفين صحيحين.");
+    const transaction: CashBankTransaction = { id: createId("cash-bank-transaction"), type: input.type, date, amount: Number(amount.toFixed(2)), description, cashBankAccountId: cashBank.id, counterpartAccountId: counterpart.id, journalEntryId: "", createdAt: new Date().toISOString() };
+    const lines: JournalLine[] = input.type === "receipt" ? [{ id: createId("line"), accountId: cashAccount.id, category: cashAccount.category, debit: transaction.amount, credit: 0 }, { id: createId("line"), accountId: counterpart.id, category: counterpart.category, debit: 0, credit: transaction.amount }] : [{ id: createId("line"), accountId: counterpart.id, category: counterpart.category, debit: transaction.amount, credit: 0 }, { id: createId("line"), accountId: cashAccount.id, category: cashAccount.category, debit: 0, credit: transaction.amount }];
+    if (!validateJournalLines(lines).isBalanced) throw new Error("تعذر إنشاء قيد حركة نقدية متوازن.");
+    const journalEntry: JournalEntry = { id: createId("journal"), description, date, createdAt: new Date().toISOString(), lines, currency: state.currency, fxRate: 1, documentReference: `CB-${date}-${transaction.id.slice(-4)}` };
+    transaction.journalEntryId = journalEntry.id;
+    await commit({ ...state, cashBankTransactions: [transaction, ...state.cashBankTransactions], journalEntries: [journalEntry, ...state.journalEntries], auditLog: [newAuditLog("cash_bank_transaction_posted", `ترحيل ${input.type === "receipt" ? "قبض" : "صرف"}: ${cashBank.name}`, transaction.id), ...state.auditLog] });
+    return transaction;
+  }, [commit, state]);
+
+  const transferCashBankFunds = useCallback(async (input: NewCashBankTransfer) => {
+    const amount = Number(input.amount); const date = normaliseDateOnly(input.date); const description = input.description.trim();
+    const from = state.cashBankAccounts.find((account) => account.id === input.fromCashBankAccountId); const to = state.cashBankAccounts.find((account) => account.id === input.toCashBankAccountId); const fromAccount = from ? state.accounts.find((account) => account.id === from.accountId) : undefined; const toAccount = to ? state.accounts.find((account) => account.id === to.accountId) : undefined;
+    if (!from || !to || !fromAccount || !toAccount || from.id === to.id || fromAccount.id === toAccount.id || !date || !description || !Number.isFinite(amount) || amount <= 0) throw new Error("أكمل بيانات التحويل واختر حسابي نقد أو بنك مختلفين.");
+    const transaction: CashBankTransaction = { id: createId("cash-bank-transfer"), type: "transfer", date, amount: Number(amount.toFixed(2)), description, fromCashBankAccountId: from.id, toCashBankAccountId: to.id, journalEntryId: "", createdAt: new Date().toISOString() };
+    const lines: JournalLine[] = [{ id: createId("line"), accountId: toAccount.id, category: toAccount.category, debit: transaction.amount, credit: 0 }, { id: createId("line"), accountId: fromAccount.id, category: fromAccount.category, debit: 0, credit: transaction.amount }];
+    if (!validateJournalLines(lines).isBalanced) throw new Error("تعذر إنشاء قيد تحويل متوازن.");
+    const journalEntry: JournalEntry = { id: createId("journal"), description, date, createdAt: new Date().toISOString(), lines, currency: state.currency, fxRate: 1, documentReference: `TR-${date}-${transaction.id.slice(-4)}` };
+    transaction.journalEntryId = journalEntry.id;
+    await commit({ ...state, cashBankTransactions: [transaction, ...state.cashBankTransactions], journalEntries: [journalEntry, ...state.journalEntries], auditLog: [newAuditLog("cash_bank_transaction_posted", `تحويل من ${from.name} إلى ${to.name}`, transaction.id), ...state.auditLog] });
+    return transaction;
+  }, [commit, state]);
+
+  const addBudget = useCallback(async (input: NewBudget) => {
+    const name = input.name.trim(); const startDate = normaliseDateOnly(input.startDate); const endDate = normaliseDateOnly(input.endDate);
+    if (!name || !startDate || !endDate || endDate < startDate) throw new Error("أدخل اسم الميزانية وفترتها بشكل صحيح.");
+    if (state.budgets.some((budget) => budget.name.toLocaleLowerCase() === name.toLocaleLowerCase())) throw new Error("توجد ميزانية بالاسم نفسه.");
+    const budget: Budget = { id: createId("budget"), name, startDate, endDate, notes: input.notes?.trim() || undefined, createdAt: new Date().toISOString() };
+    await commit({ ...state, budgets: [budget, ...state.budgets], auditLog: [newAuditLog("budget_created", `إضافة ميزانية: ${budget.name}`, budget.id), ...state.auditLog] });
+    return budget;
+  }, [commit, state]);
+
+  const addBudgetLine = useCallback(async (input: NewBudgetLine) => {
+    const plannedAmount = Number(input.plannedAmount); const budget = state.budgets.find((candidate) => candidate.id === input.budgetId); const account = state.accounts.find((candidate) => candidate.id === input.accountId);
+    if (!budget || !account || (account.category !== "revenue" && account.category !== "expense") || !Number.isFinite(plannedAmount) || plannedAmount <= 0) throw new Error("اختر ميزانية وحساب إيراد أو مصروف وأدخل مبلغاً مخططاً أكبر من صفر.");
+    if (state.budgetLines.some((line) => line.budgetId === budget.id && line.accountId === account.id)) throw new Error("يوجد بند مخطط لهذا الحساب في الميزانية المختارة.");
+    const line: BudgetLine = { id: createId("budget-line"), budgetId: budget.id, accountId: account.id, plannedAmount: Number(plannedAmount.toFixed(2)), createdAt: new Date().toISOString() };
+    await commit({ ...state, budgetLines: [line, ...state.budgetLines], auditLog: [newAuditLog("budget_line_created", `إضافة بند ميزانية: ${account.name}`, line.id), ...state.auditLog] });
+    return line;
+  }, [commit, state]);
+
   const reverseJournalEntry = useCallback(async (id: string, date?: string) => {
     const entry = state.journalEntries.find((candidate) => candidate.id === id);
     const reversalDate = normaliseDateOnly(date ?? new Date().toISOString());
@@ -693,7 +809,7 @@ export function AccountingProvider({ children }: { children: ReactNode }) {
   const accountBalances = useMemo(() => calculateAccountBalances(state.accounts, state.journalEntries), [state.accounts, state.journalEntries]);
   const summary = useMemo(() => calculateCategoryTotals(state.accounts, accountBalances), [accountBalances, state.accounts]);
   const balanceSheet = useMemo(() => calculateBalanceSheet(summary), [summary]);
-  const value = useMemo<AccountingContextValue>(() => ({ state, isReady, summary, accountBalances, netIncome: calculateNetIncome(summary), balanceSheet, addAccount, addJournalEntry, importJournalEntries, addContact, deleteContact, addAccountingItem, deleteAccountingItem, addInstallment, updateInstallmentStatus, updateInstallmentSchedule, deleteInstallment, addCostCenter, deleteCostCenter, createVoucher, createCommercialDocument, postCommercialDocument, addInventoryItem, recordInventoryMovement, addEmployee, createPayrollRun, postPayrollRun, addFixedAsset, recordMonthlyDepreciation, reverseJournalEntry, suggestAccountCode, updateAccountNumbering, addSubrange, deleteSubrange, updateCurrency, acceptTerms, exportBackup, restoreBackup, clearAllData }), [acceptTerms, accountBalances, addAccount, addAccountingItem, addContact, addCostCenter, addEmployee, addFixedAsset, addInstallment, addInventoryItem, addJournalEntry, addSubrange, balanceSheet, clearAllData, createCommercialDocument, createPayrollRun, createVoucher, deleteAccountingItem, deleteContact, deleteCostCenter, deleteInstallment, deleteSubrange, exportBackup, importJournalEntries, isReady, postCommercialDocument, postPayrollRun, recordInventoryMovement, recordMonthlyDepreciation, restoreBackup, reverseJournalEntry, state, suggestAccountCode, summary, updateAccountNumbering, updateCurrency, updateInstallmentSchedule, updateInstallmentStatus]);
+  const value = useMemo<AccountingContextValue>(() => ({ state, isReady, summary, accountBalances, netIncome: calculateNetIncome(summary), balanceSheet, addAccount, addJournalEntry, importJournalEntries, addContact, deleteContact, addAccountingItem, deleteAccountingItem, addInstallment, updateInstallmentStatus, updateInstallmentSchedule, deleteInstallment, addCostCenter, deleteCostCenter, createVoucher, createCommercialDocument, postCommercialDocument, addInventoryItem, recordInventoryMovement, addEmployee, createPayrollRun, postPayrollRun, addFixedAsset, recordMonthlyDepreciation, addCashBankAccount, createCashBankTransaction, transferCashBankFunds, addBudget, addBudgetLine, reverseJournalEntry, suggestAccountCode, updateAccountNumbering, addSubrange, deleteSubrange, updateCurrency, acceptTerms, exportBackup, restoreBackup, clearAllData }), [acceptTerms, accountBalances, addAccount, addAccountingItem, addBudget, addBudgetLine, addCashBankAccount, addContact, addCostCenter, addEmployee, addFixedAsset, addInstallment, addInventoryItem, addJournalEntry, addSubrange, balanceSheet, clearAllData, createCashBankTransaction, createCommercialDocument, createPayrollRun, createVoucher, deleteAccountingItem, deleteContact, deleteCostCenter, deleteInstallment, deleteSubrange, exportBackup, importJournalEntries, isReady, postCommercialDocument, postPayrollRun, recordInventoryMovement, recordMonthlyDepreciation, restoreBackup, reverseJournalEntry, state, suggestAccountCode, summary, transferCashBankFunds, updateAccountNumbering, updateCurrency, updateInstallmentSchedule, updateInstallmentStatus]);
   return <AccountingContext.Provider value={value}>{children}</AccountingContext.Provider>;
 }
 

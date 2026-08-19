@@ -14,6 +14,7 @@ const items: DrawerItem[] = [
   { id: "controls", label: "الرقابة المالية", description: "ميزان مراجعة وذمم وسجل تدقيق", icon: "verified-user", color: "#7357C8", softColor: "#EEE9FE", path: "/controls" },
   { id: "business", label: "التشغيل التجاري", description: "فواتير ومخزون ورواتب وأصول", icon: "business-center", color: "#154C79", softColor: "#E4F1F9", path: "/business" },
   { id: "operations-reports", label: "تقارير التشغيل", description: "مبيعات وضريبة ومخزون ورواتب وأصول", icon: "insights", color: "#7357C8", softColor: "#EEE9FE", path: "/operations-reports" },
+  { id: "financial-management", label: "الصندوق والبنوك والميزانيات", description: "سيولة، تحويلات وخطط مالية", icon: "account-balance-wallet", color: "#168A63", softColor: "#E3F5EE", path: "/financial-management" },
   { id: "ledger", label: "دفتر الأستاذ", description: "حركات الحسابات والأرصدة الجارية", icon: "menu-book", color: "#168A63", softColor: "#E3F5EE", path: "/ledger" },
   { id: "items", label: "البنود المحاسبية", description: "قوالب بنود مرتبطة بالحسابات", icon: "receipt-long", color: "#C44747", softColor: "#FCEAEA", path: "/accounting-items" },
 ];
