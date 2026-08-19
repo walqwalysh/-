@@ -7,6 +7,7 @@ import { currencyOptionsForBase, normaliseCurrencyCode, type CurrencyOption } fr
 import { normaliseDateOnly } from "@/lib/date-utils";
 import { formatAmount, formatNumber, numberLocaleCode, setActiveNumberLocale, type NumberLocale } from "./number-formatting";
 import { normaliseBankReconciliation, type BankReconciliation, type BankStatementLine, type BankStatementLineStatus, type NewBankStatementLine } from "./bank-reconciliation";
+import { replaceMatchingAccountCode, validateAccountUpdate } from "./account-update";
 
 export { formatAmount, formatNumber, numberLocaleCode } from "./number-formatting";
 export type { NumberLocale } from "./number-formatting";
@@ -36,7 +37,7 @@ export type CashBankTransactionType = "receipt" | "payment" | "transfer";
 export type CashBankTransaction = { id: string; type: CashBankTransactionType; date: string; amount: number; description: string; cashBankAccountId?: string; counterpartAccountId?: string; fromCashBankAccountId?: string; toCashBankAccountId?: string; journalEntryId: string; createdAt: string };
 export type Budget = { id: string; name: string; startDate: string; endDate: string; notes?: string; createdAt: string };
 export type BudgetLine = { id: string; budgetId: string; accountId: string; plannedAmount: number; createdAt: string };
-export type AuditAction = "account_created" | "journal_posted" | "journal_reversed" | "journal_imported" | "contact_created" | "contact_deleted" | "item_created" | "installment_created" | "voucher_created" | "cash_bank_account_created" | "cash_bank_transaction_posted" | "bank_reconciliation_created" | "bank_reconciliation_updated" | "bank_reconciliation_deleted" | "budget_created" | "budget_line_created" | "currency_created" | "currency_deleted" | "cost_center_created" | "cost_center_deleted" | "document_created" | "document_posted" | "inventory_item_created" | "inventory_movement_recorded" | "employee_created" | "payroll_created" | "payroll_posted" | "asset_created" | "depreciation_posted";
+export type AuditAction = "account_created" | "account_updated" | "journal_posted" | "journal_reversed" | "journal_imported" | "contact_created" | "contact_deleted" | "item_created" | "installment_created" | "voucher_created" | "cash_bank_account_created" | "cash_bank_transaction_posted" | "bank_reconciliation_created" | "bank_reconciliation_updated" | "bank_reconciliation_deleted" | "budget_created" | "budget_line_created" | "currency_created" | "currency_deleted" | "cost_center_created" | "cost_center_deleted" | "document_created" | "document_posted" | "inventory_item_created" | "inventory_movement_recorded" | "employee_created" | "payroll_created" | "payroll_posted" | "asset_created" | "depreciation_posted";
 export type AuditLog = { id: string; action: AuditAction; description: string; entityId?: string; createdAt: string };
 export type AccountingBackup = { format: "smart-accountant-backup"; version: 1; exportedAt: string; data: AccountingState };
 
@@ -145,6 +146,7 @@ export const accountNatureLabel = (nature: AccountNature) => (nature === "debit"
 
 type NewJournalLine = Omit<JournalLine, "id">;
 type NewAccount = { name: string; code: string; category: AccountCategory; scope: string; subrangeId?: string };
+export type AccountUpdate = Pick<Account, "name" | "code">;
 export type NewContact = { name: string; phone: string; type: ContactType; accountCode?: string; notes?: string };
 export type NewAccountingItem = { name: string; category: AccountCategory; accountCode?: string; defaultAmount?: number; notes?: string };
 export type NewInstallment = { contactId: string; title?: string; totalAmount: number; installmentAmount: number; startDate: string; endDate: string; debitAccountCode: string; creditAccountCode: string };
@@ -174,6 +176,7 @@ type AccountingContextValue = {
   netIncome: number;
   balanceSheet: BalanceSheet;
   addAccount: (input: NewAccount) => Promise<Account>;
+  updateAccount: (id: string, input: AccountUpdate) => Promise<Account>;
   addJournalEntry: (input: { description: string; date: string; lines: NewJournalLine[]; source?: JournalEntrySource; currency?: string; fxRate?: number; documentReference?: string; costCenterId?: string }) => Promise<void>;
   importJournalEntries: (journals: ImportedJournal[]) => Promise<{ imported: number; skipped: number }>;
   addContact: (input: NewContact) => Promise<Contact>;
@@ -486,6 +489,28 @@ export function AccountingProvider({ children }: { children: ReactNode }) {
     const account: Account = { id: createId("account"), code, name, category: input.category, nature: accountNatureFor(input.category), scope, subrangeId: selectedRange?.id, createdAt: new Date().toISOString() };
     await commit({ ...state, accounts: [...state.accounts, account], auditLog: [newAuditLog("account_created", `إضافة حساب: ${account.name} (${account.code})`, account.id), ...state.auditLog] });
     return account;
+  }, [commit, state]);
+
+  const updateAccount = useCallback(async (id: string, input: AccountUpdate) => {
+    const existing = state.accounts.find((account) => account.id === id);
+    if (!existing) throw new Error("الحساب المطلوب غير موجود.");
+    const { name, code } = validateAccountUpdate(existing, input, state.accounts, state.subranges);
+    if (existing.name === name && existing.code === code) return existing;
+    const updatedAccount: Account = { ...existing, name, code };
+    const nextState: AccountingState = {
+      ...state,
+      accounts: state.accounts.map((account) => account.id === id ? updatedAccount : account),
+      contacts: state.contacts.map((contact) => ({ ...contact, accountCode: replaceMatchingAccountCode(contact.accountCode, existing.code, code) })),
+      accountingItems: state.accountingItems.map((item) => ({ ...item, accountCode: replaceMatchingAccountCode(item.accountCode, existing.code, code) })),
+      installments: state.installments.map((installment) => ({
+        ...installment,
+        debitAccountCode: replaceMatchingAccountCode(installment.debitAccountCode, existing.code, code) ?? installment.debitAccountCode,
+        creditAccountCode: replaceMatchingAccountCode(installment.creditAccountCode, existing.code, code) ?? installment.creditAccountCode,
+      })),
+      auditLog: [newAuditLog("account_updated", `تعديل حساب: ${existing.name} (${existing.code}) ← ${name} (${code})`, id), ...state.auditLog],
+    };
+    await commit(nextState);
+    return updatedAccount;
   }, [commit, state]);
 
   const addJournalEntry = useCallback(async (input: { description: string; date: string; lines: NewJournalLine[]; source?: JournalEntrySource; currency?: string; fxRate?: number; documentReference?: string; costCenterId?: string }) => {
@@ -946,7 +971,7 @@ export function AccountingProvider({ children }: { children: ReactNode }) {
   const summary = useMemo(() => calculateCategoryTotals(state.accounts, accountBalances), [accountBalances, state.accounts]);
   const balanceSheet = useMemo(() => calculateBalanceSheet(summary), [summary]);
   useEffect(() => { setActiveNumberLocale(state.numberLocale); }, [state.numberLocale]);
-  const value = useMemo<AccountingContextValue>(() => ({ state, isReady, summary, accountBalances, netIncome: calculateNetIncome(summary), balanceSheet, addAccount, addJournalEntry, importJournalEntries, addContact, deleteContact, addAccountingItem, deleteAccountingItem, addInstallment, updateInstallmentStatus, updateInstallmentSchedule, deleteInstallment, addCostCenter, deleteCostCenter, createVoucher, createCommercialDocument, postCommercialDocument, addInventoryItem, recordInventoryMovement, addEmployee, createPayrollRun, postPayrollRun, addFixedAsset, recordMonthlyDepreciation, addCashBankAccount, createCashBankTransaction, transferCashBankFunds, addBankReconciliation, updateBankReconciliation, addReconciliationLine, addReconciliationLines, updateReconciliationLine, deleteBankReconciliation, addBudget, addBudgetLine, reverseJournalEntry, suggestAccountCode, updateAccountNumbering, addSubrange, deleteSubrange, updateCurrency, addCurrency, deleteCurrency, updateNumberLocale, acceptTerms, exportBackup, restoreBackup, clearAllData }), [acceptTerms, accountBalances, addAccount, addAccountingItem, addBankReconciliation, addBudget, addBudgetLine, addCashBankAccount, addContact, addCostCenter, addCurrency, addEmployee, addFixedAsset, addInstallment, addInventoryItem, addJournalEntry, addReconciliationLine, addReconciliationLines, addSubrange, balanceSheet, clearAllData, createCashBankTransaction, createCommercialDocument, createPayrollRun, createVoucher, deleteAccountingItem, deleteBankReconciliation, deleteContact, deleteCostCenter, deleteCurrency, deleteInstallment, deleteSubrange, exportBackup, importJournalEntries, isReady, postCommercialDocument, postPayrollRun, recordInventoryMovement, recordMonthlyDepreciation, restoreBackup, reverseJournalEntry, state, suggestAccountCode, summary, transferCashBankFunds, updateAccountNumbering, updateBankReconciliation, updateCurrency, updateInstallmentSchedule, updateInstallmentStatus, updateNumberLocale, updateReconciliationLine]);
+  const value = useMemo<AccountingContextValue>(() => ({ state, isReady, summary, accountBalances, netIncome: calculateNetIncome(summary), balanceSheet, addAccount, updateAccount, addJournalEntry, importJournalEntries, addContact, deleteContact, addAccountingItem, deleteAccountingItem, addInstallment, updateInstallmentStatus, updateInstallmentSchedule, deleteInstallment, addCostCenter, deleteCostCenter, createVoucher, createCommercialDocument, postCommercialDocument, addInventoryItem, recordInventoryMovement, addEmployee, createPayrollRun, postPayrollRun, addFixedAsset, recordMonthlyDepreciation, addCashBankAccount, createCashBankTransaction, transferCashBankFunds, addBankReconciliation, updateBankReconciliation, addReconciliationLine, addReconciliationLines, updateReconciliationLine, deleteBankReconciliation, addBudget, addBudgetLine, reverseJournalEntry, suggestAccountCode, updateAccountNumbering, addSubrange, deleteSubrange, updateCurrency, addCurrency, deleteCurrency, updateNumberLocale, acceptTerms, exportBackup, restoreBackup, clearAllData }), [acceptTerms, accountBalances, addAccount, addAccountingItem, addBankReconciliation, addBudget, addBudgetLine, addCashBankAccount, addContact, addCostCenter, addCurrency, addEmployee, addFixedAsset, addInstallment, addInventoryItem, addJournalEntry, addReconciliationLine, addReconciliationLines, addSubrange, balanceSheet, clearAllData, createCashBankTransaction, createCommercialDocument, createPayrollRun, createVoucher, deleteAccountingItem, deleteBankReconciliation, deleteContact, deleteCostCenter, deleteCurrency, deleteInstallment, deleteSubrange, exportBackup, importJournalEntries, isReady, postCommercialDocument, postPayrollRun, recordInventoryMovement, recordMonthlyDepreciation, restoreBackup, reverseJournalEntry, state, suggestAccountCode, summary, transferCashBankFunds, updateAccount, updateAccountNumbering, updateBankReconciliation, updateCurrency, updateInstallmentSchedule, updateInstallmentStatus, updateNumberLocale, updateReconciliationLine]);
   return <AccountingContext.Provider value={value}>{children}</AccountingContext.Provider>;
 }
 
